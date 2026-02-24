@@ -1,0 +1,32 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "dockerfile",
+    "context": "./backend"
+  },
+  "deploy": {
+    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+    "numReplicas": 1,
+    "restartPolicyType": "on_failure",
+    "restartPolicyMaxRetries": 3
+  },
+  "variables": {
+    "OPENAI_API_KEY": {
+      "description": "Your OpenAI API key for GPT-4 Turbo access"
+    },
+    "SECRET_KEY": {
+      "description": "Secret key for session management",
+      "value": "change-this-in-production-use-a-secure-random-key"
+    },
+    "DATABASE_URL": {
+      "description": "PostgreSQL connection string (set by Railway PostgreSQL plugin)"
+    },
+    "SCRAPE_INTERVAL_MINUTES": {
+      "description": "Interval for scraping regulatory updates",
+      "value": "60"
+    }
+  },
+  "environmentOverrides": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}
