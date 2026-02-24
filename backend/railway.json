@@ -1,0 +1,29 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "dockerfile"
+  },
+  "deploy": {
+    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+    "numReplicas": 1,
+    "restartPolicyType": "on_failure",
+    "restartPolicyMaxRetries": 3
+  },
+  "variables": {
+    "OPENAI_API_KEY": {
+      "description": "Your OpenAI API key for GPT-4 Turbo access"
+    },
+    "SECRET_KEY": {
+      "description": "Secret key for session management (change in production)",
+      "value": "change-this-in-production-use-a-secure-random-key"
+    },
+    "SCRAPE_INTERVAL_MINUTES": {
+      "description": "Interval in minutes between scheduled scrapes",
+      "value": "360"
+    },
+    "FRONTEND_URL": {
+      "description": "Frontend URL for CORS configuration",
+      "value": "https://your-frontend-domain.railway.app"
+    }
+  }
+}

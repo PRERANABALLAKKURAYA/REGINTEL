@@ -1,0 +1,68 @@
+# Project root .gitignore
+# This file prevents sensitive data from being committed
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Node
+node_modules/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing & Logs
+.pytest_cache/
+coverage/
+*.log
+.coverage
+htmlcov/
+
+# SQLite (use PostgreSQL in production)
+*.sqlite3
+*.db
+
+# Temporary files
+*.tmp
+.cache/
+.next/
+out/
+dist/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Build artifacts
+backend/dist/
+frontend/dist/
+frontend/.next/

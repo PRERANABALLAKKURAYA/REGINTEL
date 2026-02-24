@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=reg_db
+    # Internal port only, not exposed to host to force unified access via App
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db/reg_db
+      - SECRET_KEY=supersecretkeyshouldbechangedinproduction
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      # Browser will access API via relative path /api/v1 which goes to Nginx -> Backend
+      - NEXT_PUBLIC_API_URL=/api/v1
+    depends_on:
+      - backend
+    # No ports exposed to host
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "9090:80"
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
