@@ -8,8 +8,8 @@ RUN apk add --no-cache gcc musl-dev g++ libffi-dev openssl-dev
 
 COPY requirements.txt .
 
-# Build wheels in builder stage
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /build/wheels -r requirements.txt
+# Build wheels in builder stage (including transitive dependencies)
+RUN pip wheel --no-cache-dir --wheel-dir /build/wheels -r requirements.txt
 
 # Production stage - minimal runtime
 FROM python:3.11-alpine
