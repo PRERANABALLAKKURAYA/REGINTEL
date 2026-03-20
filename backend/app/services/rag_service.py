@@ -42,26 +42,29 @@ class RAGService:
         }
 
     def _initialize_embedding_model(self):
-        """Initialize SentenceTransformer model for embeddings"""
+        """Initialize FastEmbed model for embeddings (ONNX-based, lightweight)"""
         try:
-            from sentence_transformers import SentenceTransformer
-            # Use efficient multi-lingual model for regulatory text
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            print("[RAG] Initialized SentenceTransformer: all-MiniLM-L6-v2")
+            from fastembed import SparseTextEmbedding, TextEmbedding
+            # Use efficient ONNX-based model (384-dim, comparable to all-MiniLM-L6-v2)
+            # BAAI/bge-small-en-v1.5 is 384-dimensional and optimized for semantic search
+            self.embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            print("[RAG] Initialized FastEmbed: BAAI/bge-small-en-v1.5 (ONNX-based)")
         except Exception as e:
             print(f"[RAG] Warning: Could not initialize embedding model: {e}")
             self.embedding_model = None
 
     def _get_embedding(self, text: str) -> np.ndarray:
-        """Generate semantic embedding for text"""
+        """Generate semantic embedding for text using FastEmbed"""
         if self.embedding_model is None:
             # Fallback to zero vector if model not available
-            return np.zeros(384)  # all-MiniLM-L6-v2 produces 384-dim embeddings
+            return np.zeros(384)  # BAAI/bge-small-en-v1.5 produces 384-dim embeddings
         
         try:
-            # Truncate text to reasonable length (512 tokens max)
+            # Truncate text to reasonable length
             text = text[:2000]
-            embedding = self.embedding_model.encode(text, convert_to_numpy=True)
+            # FastEmbed returns generator of embeddings, take first and convert to numpy
+            embeddings = list(self.embedding_model.embed([text]))
+            embedding = np.array(embeddings[0]) if embeddings else np.zeros(384)
             return embedding
         except Exception as e:
             print(f"[RAG] Embedding generation error: {e}")
