@@ -18,11 +18,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install only runtime dependencies (Debian-based)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libffi7 libssl3 \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy pre-built wheels from builder
 COPY --from=builder /build/wheels /wheels
 COPY requirements.txt .
