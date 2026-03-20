@@ -29,7 +29,6 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.t
 
 # Copy only necessary app files (exclude test/, migrations, __pycache__, etc.)
 COPY app/ app/
-COPY .env.example .env.example
 
 # Create non-root user for security (Alpine-specific)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser && chown -R appuser:appuser /app
