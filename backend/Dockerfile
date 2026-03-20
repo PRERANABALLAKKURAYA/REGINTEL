@@ -1,10 +1,12 @@
 # Build stage - compile dependencies
-FROM python:3.11-alpine AS builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# Install build dependencies (Alpine-specific)
-RUN apk add --no-cache gcc musl-dev g++ libffi-dev openssl-dev
+# Install build dependencies (Debian-based)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ libffi-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
@@ -12,12 +14,14 @@ COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir /build/wheels -r requirements.txt
 
 # Production stage - minimal runtime
-FROM python:3.11-alpine
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install only runtime dependencies (Alpine-specific)
-RUN apk add --no-cache libffi openssl
+# Install only runtime dependencies (Debian-based)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libffi7 libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-built wheels from builder
 COPY --from=builder /build/wheels /wheels
@@ -30,8 +34,8 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.t
 # Copy only necessary app files (exclude test/, migrations, __pycache__, etc.)
 COPY app/ app/
 
-# Create non-root user for security (Alpine-specific)
-RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser && chown -R appuser:appuser /app
+# Create non-root user for security (Debian-based)
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
