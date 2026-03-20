@@ -1,0 +1,52 @@
+AUTHORITY_SOURCE_REGISTRY = {
+    "FDA": {
+        "country": "USA",
+        "website": "https://www.fda.gov",
+        "access_type": "api+rss+html",
+        "news_endpoint": "https://www.fda.gov/news-events/press-announcements",
+        "api_endpoint": "https://api.fda.gov/",
+        "guidelines_endpoint": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents",
+    },
+    "EMA": {
+        "country": "EU",
+        "website": "https://www.ema.europa.eu",
+        "access_type": "rss+html",
+        "news_endpoint": "https://www.ema.europa.eu/en/news.xml",
+        "guidelines_endpoint": "https://www.ema.europa.eu/en/documents/scientific-guideline",
+    },
+    "ICH": {
+        "country": "International",
+        "website": "https://www.ich.org",
+        "access_type": "html",
+        "news_endpoint": "https://www.ich.org/page/press-releases",
+        "guidelines_endpoint": "https://www.ich.org/page/guidelines",
+    },
+    "MHRA": {
+        "country": "UK",
+        "website": "https://www.gov.uk/government/organisations/medicines-and-healthcare-products-regulatory-agency",
+        "access_type": "atom+html",
+        "news_endpoint": "https://www.gov.uk/government/organisations/medicines-and-healthcare-products-regulatory-agency.atom",
+        "guidelines_endpoint": "https://www.gov.uk/government/collections/medical-device-guidance",
+    },
+    "PMDA": {
+        "country": "Japan",
+        "website": "https://www.pmda.go.jp",
+        "access_type": "html",
+        "news_endpoint": "https://www.pmda.go.jp/english/safety/info-services/drugs/0001.html",
+        "guidelines_endpoint": "https://www.pmda.go.jp/english/industry/standard/01.html",
+    },
+    "CDSCO": {
+        "country": "India",
+        "website": "https://cdsco.gov.in",
+        "access_type": "html",
+        "news_endpoint": "https://cdsco.gov.in/opencms/opencms/en/Notifications/Circulars/",
+        "guidelines_endpoint": "https://cdsco.gov.in/opencms/opencms/en/Guidelines/",
+    },
+    "NMPA": {
+        "country": "China",
+        "website": "https://www.nmpa.gov.cn",
+        "access_type": "html",
+        "news_endpoint": "https://www.nmpa.gov.cn/xxgk/ggtg/",
+        "guidelines_endpoint": "https://www.nmpa.gov.cn/xxgk/fgwj/gzwj/gzwjyp/",
+    },
+}

@@ -9,6 +9,7 @@ class Update(Base):
     category = Column(String, index=True)
     published_date = Column(DateTime, nullable=False)
     source_link = Column(String, unique=True, nullable=False)
+    pdf_file_path = Column(String, nullable=True)  # Path to stored PDF file
     full_text = Column(Text, nullable=True)
     short_summary = Column(Text, nullable=True)
     detailed_summary = Column(Text, nullable=True)

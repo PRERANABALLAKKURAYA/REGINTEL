@@ -211,7 +211,7 @@ export default function DashboardOverview() {
             Regulatory Pulse
           </h1>
           <p className="mt-4 text-xl text-gray-300">
-            Monitor 6 global authorities. Catch compliance changes in real-time. Leverage AI for instant analysis.
+            Monitor 7 global authorities. Catch compliance changes in real-time. Leverage AI for instant analysis.
           </p>
           <div className="mt-8 flex flex-wrap gap-4">
             <button onClick={handleExploreUpdates} className="px-7 py-3.5 bg-[#00d9ff] text-[#0b152b] rounded-lg font-semibold hover:opacity-90 transition text-base">
@@ -228,7 +228,7 @@ export default function DashboardOverview() {
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {[
           { label: "Total Updates", value: updates.length > 0 ? updates.length : "—", icon: "📋" },
-          { label: "Authorities", value: authorities.length || 6, icon: "🌍" },
+          { label: "Authorities", value: authorities.length || 7, icon: "🌍" },
           { label: "This Week", value: updates.slice(0, 5).length || 0, icon: "📈" },
           { label: "System Status", value: "Live", icon: "🟢", color: "text-green-400" },
         ].map((stat, i) => (

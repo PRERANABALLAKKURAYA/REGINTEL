@@ -37,28 +37,8 @@ class ICHScraper(BaseScraper):
         now = datetime.utcnow()
         
         for i, (title, summary) in enumerate(ich_topics):
-            # Create specific ICH guideline URL based on guideline category
-            # ICH organizes guidelines by type: Q (Quality), E (Efficacy), S (Safety), M (Multidisciplinary)
-            guideline_code = title.split(':')[0].replace('ICH ', '').strip()
-            
-            # Determine guideline category page
-            first_letter = guideline_code[0].upper()
-            if first_letter == 'Q':
-                category_page = "quality-guidelines"
-            elif first_letter == 'E':
-                category_page = "efficacy-guidelines"
-            elif first_letter == 'S':
-                category_page = "safety-guidelines"
-            elif first_letter == 'M':
-                category_page = "multidisciplinary-guidelines"
-            elif first_letter == 'Z':
-                category_page = "ctd-guidelines"
-            else:
-                category_page = "ich-guidelines"
-            
-            # Create clean guideline identifier for anchor
-            guideline_id = guideline_code.lower().replace('(', '').replace(')', '').replace(' ', '-')
-            source_link = f"https://www.ich.org/page/{category_page}#{guideline_id}"
+            # Use ICH guidelines main page as source (real, working URL)
+            source_link = "https://www.ich.org/page/guidelines"
             
             updates.append({
                 "title": title,

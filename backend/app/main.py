@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import api_router
@@ -13,12 +14,17 @@ from app.scrapers.scheduler import start_scheduler
 
 app = FastAPI(title="Pharma Regulatory Intelligence API")
 
+allowed_origins = [
+    "http://localhost:9090",
+    "http://127.0.0.1:9090",
+]
+frontend_origin = os.getenv("FRONTEND_ORIGIN")
+if frontend_origin:
+    allowed_origins.append(frontend_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:9090",
-        "http://127.0.0.1:9090",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

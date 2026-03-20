@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkeyshouldbechangedinproduction")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    SQLALCHEMY_DATABASE_URL: str = "postgresql://postgres:password@localhost/reg_db"
+    SQLALCHEMY_DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./reg_db.sqlite3")
 
     class Config:
         case_sensitive = True

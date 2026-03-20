@@ -214,8 +214,8 @@ def analyze_update(update_id: int, request: dict, db: Session = Depends(get_db))
         
         print(f"[ANALYZE] Analyzing update {update_id} at {difficulty_level} level")
         
-        # Import AI service
-        from app.services.ai_service import ai_service
+        # Import Groq AI service
+        from app.services.ai_service_groq import ai_service
         
         # Generate analysis
         analysis = ai_service.analyze_update(

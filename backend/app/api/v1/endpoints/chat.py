@@ -5,8 +5,9 @@ from sqlalchemy import or_, func
 from datetime import datetime, timedelta
 import numpy as np
 from app.api import deps
-from app.services.ai_service import ai_service
+from app.services.ai_service_groq import ai_service
 from app.services.rag_service import rag_service
+from app.services.document_service import document_service
 from app.models.update import Update
 from app.models.authority import Authority
 from app.models.notification import Notification
@@ -34,6 +35,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list
+    pdfs: list = []  # List of PDF info with download links
 
 class SummaryRequest(BaseModel):
     text: str = None
@@ -93,16 +95,8 @@ def classify_query_type(query: str) -> tuple[str, str]:
     ]
     if any(indicator in query_lower for indicator in list_indicators):
         return ("LIST_REQUEST", "list")
-    
-    # INTENT 3: EXPLANATION_REQUEST - User asks to explain something
-    explanation_indicators = [
-        "explain", "describe", "what is", "what are", "tell me about",
-        "help me understand", "clarify", "understand"
-    ]
-    if any(indicator in query_lower for indicator in explanation_indicators):
-        return ("EXPLANATION_REQUEST", "explanation")
-    
-    # INTENT 4: GUIDELINE_REQUEST - User asks for guidelines, standards
+
+    # INTENT 3: GUIDELINE_REQUEST - User asks for guidelines, standards
     guideline_indicators = [
         "guideline", "guidance", "standard", "requirement", "specification",
         "procedure", "protocol", "gmp", "gcp", "ich q", "ich e", "ich s",
@@ -110,24 +104,24 @@ def classify_query_type(query: str) -> tuple[str, str]:
     ]
     if any(indicator in query_lower for indicator in guideline_indicators):
         return ("GUIDELINE_REQUEST", "document")
-    
-    # INTENT 5: REGULATION_REQUEST - User asks about regulations
+
+    # INTENT 4: REGULATION_REQUEST - User asks about regulations
     regulation_indicators = [
         "regulation", "rule", "law", "requirement", "compliance",
         "ctr", "cfr", "eudralex", "legal"
     ]
     if any(indicator in query_lower for indicator in regulation_indicators):
         return ("REGULATION_REQUEST", "document")
-    
-    # INTENT 6: POLICY_REQUEST - User asks about policies
+
+    # INTENT 5: POLICY_REQUEST - User asks about policies
     policy_indicators = [
         "policy", "decision", "position", "approval criteria", "process",
         "procedure", "action", "measure"
     ]
     if any(indicator in query_lower for indicator in policy_indicators):
         return ("POLICY_REQUEST", "explanation")
-    
-    # INTENT 7: DATABASE_QUERY - User asks for recent/specific updates
+
+    # INTENT 6: DATABASE_QUERY - User asks for recent/specific updates
     database_keywords = [
         "recent", "latest", "new", "this week", "today", "update",
         "announcement", "alert", "recall", "warning", "approval",
@@ -135,7 +129,15 @@ def classify_query_type(query: str) -> tuple[str, str]:
     ]
     if any(keyword in query_lower for keyword in database_keywords):
         return ("DATABASE_QUERY", "summary")
-    
+
+    # INTENT 7: EXPLANATION_REQUEST - User asks to explain something
+    explanation_indicators = [
+        "explain", "describe", "what is", "what are", "tell me about",
+        "help me understand", "clarify", "understand"
+    ]
+    if any(indicator in query_lower for indicator in explanation_indicators):
+        return ("EXPLANATION_REQUEST", "explanation")
+
     # INTENT 8: GENERAL_KNOWLEDGE - Default fallback
     return ("GENERAL_KNOWLEDGE", "explanation")
 
@@ -156,7 +158,7 @@ def chat_query(request: ChatRequest, db: Session = Depends(deps.get_db)):
     print("="*90)
     
     if not request.query or not request.query.strip():
-        return {"answer": "Please provide a valid query.", "sources": []}
+        return {"answer": "Please provide a valid query.", "sources": [], "pdfs": []}
     
     # STEP 1: Classify query intent and response type
     intent, response_type = classify_query_type(request.query)
@@ -172,26 +174,27 @@ def chat_query(request: ChatRequest, db: Session = Depends(deps.get_db)):
     
     # STEP 4: Attempt database retrieval if appropriate
     relevant_updates = []
-    retrieval_confidence = 0.0
+    retrieval_metrics = {}
     retrieval_mode = "GENERAL_GPT"  # Default to general knowledge
     
     if should_retrieve_from_db:
-        relevant_updates, retrieval_confidence = _retrieve_documents(
+        relevant_updates, retrieval_metrics = _retrieve_documents(
             db=db,
             query=request.query,
             requested_authority=requested_authority
         )
         
-        # HYBRID LOGIC: Decide based on confidence
-        HIGH_CONFIDENCE_THRESHOLD = 0.70
+        # HYBRID LOGIC: Decide based on retrieval metrics
+        docs_injected = retrieval_metrics.get("documents_injected", 0)
+        mode_from_rag = retrieval_metrics.get("mode_used", "GENERAL_KNOWLEDGE")
         
-        if relevant_updates and retrieval_confidence >= HIGH_CONFIDENCE_THRESHOLD:
+        if docs_injected > 0 and mode_from_rag == "RAG":
             retrieval_mode = "RAG"
-            print(f"[MODE] RAG (confidence: {retrieval_confidence:.2f} >= {HIGH_CONFIDENCE_THRESHOLD})")
+            print(f"[MODE] RAG ({docs_injected} documents injected)")
         else:
             retrieval_mode = "GENERAL_GPT"
             relevant_updates = []  # Clear documents for general knowledge mode
-            print(f"[MODE] GENERAL_GPT (confidence: {retrieval_confidence:.2f} < {HIGH_CONFIDENCE_THRESHOLD})")
+            print(f"[MODE] GENERAL_GPT (no relevant documents above threshold)")
     
     # STEP 5: Generate response based on mode and response type
     structured_context = ""
@@ -223,15 +226,17 @@ Content: {update.short_summary or update.full_text[:300]}"""
         structured_context = "\n\n".join(context_parts)
     
     # STEP 6: Generate response with mode awareness
+    detected_authority_from_rag = retrieval_metrics.get("detected_authority")
     answer = _generate_hybrid_response(
         query=request.query,
         context=structured_context,
         intent=intent,
         response_type=response_type,
-        authority=requested_authority,
+        authority=requested_authority or detected_authority_from_rag,
         sources=source_links,
         mode=retrieval_mode,
-        num_sources=len(relevant_updates)
+        num_sources=len(relevant_updates),
+        retrieval_metrics=retrieval_metrics
     )
     
     # STEP 7: Prepare final response
@@ -247,123 +252,124 @@ Content: {update.short_summary or update.full_text[:300]}"""
         for update in relevant_updates
     ]
     
+    # Extract PDF info from sources and generate PDFs if needed
+    pdfs = []
+    for update in relevant_updates:
+        pdf_path = update.pdf_file_path
+        
+        # Generate PDF if not already exists
+        if not pdf_path:
+            pdf_path = document_service.generate_pdf(
+                update_id=update.id,
+                title=update.title,
+                authority=update.authority.name if update.authority else "Unknown",
+                published_date=update.published_date,
+                category=update.category or "General",
+                full_text=update.full_text or "",
+                short_summary=update.short_summary or "",
+                source_link=update.source_link
+            )
+            # Update database with PDF path
+            if pdf_path:
+                update.pdf_file_path = pdf_path
+        
+        if pdf_path:
+            pdfs.append({
+                "id": update.id,
+                "title": update.title,
+                "authority": update.authority.name if update.authority else None,
+                "download_url": f"/api/v1/ai/pdf/{update.id}",  # URL to download PDF
+                "file_path": pdf_path,
+                "source_link": update.source_link,
+                "published_date": update.published_date.isoformat() if update.published_date else None,
+            })
+    
+    # Commit PDF path updates to database
+    if pdfs:
+        try:
+            db.commit()
+        except:
+            db.rollback()
+    
     # Log final metrics
-    print(f"[RESULT] Mode: {retrieval_mode} | Sources: {len(sources)} | Response length: {len(answer)}")
+    print(f"[RESULT] Mode: {retrieval_mode} | Sources: {len(sources)} | PDFs: {len(pdfs)} | Response length: {len(answer)}")
     print("="*90 + "\n")
     
-    return {"answer": answer, "sources": sources}
+    return {"answer": answer, "sources": sources, "pdfs": pdfs}
 
-def _retrieve_documents(db: Session, query: str, requested_authority: str = None) -> tuple[list, float]:
+def _retrieve_documents(db: Session, query: str, requested_authority: str = None) -> tuple[list, dict]:
     """
-    Retrieve documents from database with confidence scoring
-    Returns: (documents, confidence_score)
+    Retrieve documents from database using improved RAG service with semantic search
+    Returns: (documents, retrieval_metrics)
     
-    Confidence score indicates how well documents match the query:
-    - 0.0-0.3: Poor match (no documents or weak matches)
-    - 0.3-0.7: Moderate match (some relevant documents)
-    - 0.7-1.0: Strong match (highly relevant documents)
+    Retrieval metrics include:
+    - detected_authority: Authority detected in query
+    - filtered_by_authority: Whether authority filtering was applied
+    - similarity_scores: Cosine similarity scores for retrieved documents
+    - documents_above_threshold: Count of documents above threshold
+    - documents_injected: Number of documents returned
+    - mode_used: "RAG" or "GENERAL_KNOWLEDGE"
     """
-    query_lower = query.lower()
+    print(f"\n[RETRIEVAL] Query: {query[:100]}...")
     
-    # Extract search terms
-    stop_words = {'show', 'me', 'tell', 'about', 'what', 'is', 'are', 'the', 'a', 'an', 'of', 'to', 'for', 'in', 'on', 'at'}
-    query_words = [word for word in query_lower.split() if word not in stop_words and len(word) > 2]
+    # STEP 1: Clear RAG service and reload documents from database
+    rag_service.clear_documents()
     
-    important_terms = ['approval', 'recall', 'guidance', 'quality', 'safety', 'update', 'alert', 'warning']
-    authority_keywords = list(AUTHORITY_NAMES.keys())
-    
-    filtered_words = []
-    for w in query_words:
-        if w in important_terms or w in authority_keywords or len(w) > 3:
-            filtered_words.append(w)
-    
-    if not filtered_words:
-        filtered_words = query_words
-    
-    if not filtered_words:
-        return [], 0.0  # No searchable terms
-    
-    # Query database
+    # STEP 2: Load all updates from database into RAG service
     base_query = db.query(Update).join(Authority, Update.authority_id == Authority.id)
     
-    if requested_authority:
-        base_query = base_query.filter(Authority.name == requested_authority)
-    
-    # Build search conditions
-    search_conditions = []
-    for word in filtered_words:
-        search_term = f"%{word}%"
-        search_conditions.append(
-            or_(
-                func.lower(Update.title).like(search_term),
-                func.lower(Update.short_summary).like(search_term),
-                func.lower(Update.category).like(search_term)
-            )
-        )
-    
-    if search_conditions:
-        base_query = base_query.filter(or_(*search_conditions))
-    
     try:
-        candidates = base_query.order_by(Update.published_date.desc()).limit(20).all()
+        all_updates = base_query.order_by(Update.published_date.desc()).all()
+        print(f"[RETRIEVAL] Loaded {len(all_updates)} documents from database")
+        
+        # Add documents to RAG service with metadata
+        for update in all_updates:
+            authority_name = update.authority.name if update.authority else "Unknown"
+            date_str = update.published_date.strftime('%Y-%m-%d') if update.published_date else "Unknown"
+            
+            # Combine text for embedding
+            text = f"{update.title}. {update.short_summary or update.full_text or update.category or ''}"
+            
+            # Add document with metadata
+            rag_service.add_document(
+                doc_id=update.id,
+                text=text,
+                metadata={
+                    "authority": authority_name,
+                    "published_date": update.published_date.isoformat() if update.published_date else None,
+                    "title": update.title,
+                    "category": update.category,
+                    "source_link": update.source_link
+                }
+            )
+        
     except Exception as e:
-        print(f"[RETRIEVAL ERROR] {e}")
-        return [], 0.0
+        print(f"[RETRIEVAL ERROR] Failed to load documents: {e}")
+        return [], {"mode_used": "GENERAL_KNOWLEDGE", "error": str(e)}
     
-    if not candidates:
-        print(f"[RETRIEVAL] No candidates found")
-        return [], 0.0
+    # STEP 3: Perform semantic search with authority detection
+    retrieved_docs, metrics = rag_service.search(query, k=3, min_score=0.35)
     
-    # Score candidates
-    scored_updates = []
-    scores = []
+    print(f"[RETRIEVAL] Retrieved {len(retrieved_docs)} documents")
+    print(f"[RETRIEVAL] Metrics: {metrics}")
     
-    for update in candidates:
-        update_text = f"{update.title} {update.short_summary or ''} {update.category or ''}".lower()
-        
-        # Base score: keyword matching
-        keyword_matches = sum(update_text.count(word) for word in filtered_words)
-        max_matches = len(filtered_words) * 2
-        score = min(keyword_matches / max(max_matches, 1), 1.0)
-        
-        # Boost: exact phrase match
-        if query_lower in update_text:
-            score = min(score + 0.2, 1.0)
-        
-        # Boost: recent updates
-        if update.published_date:
-            days_old = (datetime.now() - update.published_date.replace(tzinfo=None)).days
-            if days_old <= 7:
-                score = min(score + 0.1, 1.0)
-        
-        # Boost: guidelines (official sources)
-        if hasattr(update, 'is_guideline') and update.is_guideline:
-            score = min(score + 0.15, 1.0)
-        
-        if score >= COSINE_SIMILARITY_THRESHOLD:
-            scored_updates.append((score, update))
-            scores.append(score)
+    # STEP 4: Map retrieved documents back to Update objects
+    selected_updates = []
+    if retrieved_docs:
+        doc_ids = [doc['id'] for doc in retrieved_docs]
+        selected_updates = [u for u in all_updates if u.id in doc_ids]
+        # Sort by original retrieval order
+        id_order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+        selected_updates.sort(key=lambda u: id_order.get(u.id, 999))
     
-    if not scored_updates:
-        print(f"[RETRIEVAL] No documents met threshold {COSINE_SIMILARITY_THRESHOLD}")
-        return [], 0.0
+    print(f"[RETRIEVAL] Final: {len(selected_updates)} Update objects mapped")
     
-    # Sort by score
-    scored_updates.sort(reverse=True, key=lambda x: x[0])
-    
-    # Select top documents
-    selected = [u for _, u in scored_updates[:MAX_DOCUMENTS_INJECTED]]
-    
-    # Calculate confidence: average of top scores
-    confidence = sum(scores[:len(selected)]) / len(selected) if selected else 0.0
-    
-    print(f"[RETRIEVAL] Found {len(selected)} documents | Scores: {[f'{s:.2f}' for s in scores[:len(selected)]]} | Confidence: {confidence:.2f}")
-    
-    return selected, confidence
+    return selected_updates, metrics
 
 
 def _generate_hybrid_response(query: str, context: str, intent: str, response_type: str, 
-                              authority: str, sources: list, mode: str, num_sources: int) -> str:
+                              authority: str, sources: list, mode: str, num_sources: int,
+                              retrieval_metrics: dict = None) -> str:
     """
     Generate response based on mode (RAG vs GENERAL_GPT) and response type.
     
@@ -376,123 +382,49 @@ def _generate_hybrid_response(query: str, context: str, intent: str, response_ty
     
     if mode == "GENERAL_GPT":
         # General knowledge response (no documents)
-        return _generate_general_response(query, intent, response_type, authority)
+        return _generate_general_response(query, intent, response_type, authority, retrieval_metrics)
     else:
         # RAG response (with documents)
-        return _generate_rag_response(query, context, intent, response_type, authority, sources, num_sources)
+        return _generate_rag_response(query, context, intent, response_type, authority, sources, num_sources, retrieval_metrics)
 
 
-def _generate_general_response(query: str, intent: str, response_type: str, authority: str = None) -> str:
+def _generate_general_response(query: str, intent: str, response_type: str, authority: str = None,
+                               retrieval_metrics: dict = None) -> str:
     """
-    Generate response using general GPT knowledge without database documents.
-    Used when database retrieval confidence is low.
+    Generate response using general LLM knowledge without database documents.
+    Used when database retrieval finds no relevant documents.
     """
-    authority_context = f" regarding {authority}" if authority else ""
-    base_prompt = ""
-    
-    if response_type == "explanation":
-        base_prompt = f"Provide a concise, structured explanation{authority_context} for: {query}\n\n" \
-                     f"Format: 2-3 key points, clear and professional tone. " \
-                     f"Note: This is based on general knowledge, not official regulatory documents."
-    
-    elif response_type == "document":
-        base_prompt = f"Based on general knowledge, explain the key aspects{authority_context} related to: {query}\n\n" \
-                     f"Include: Main concepts, typical requirements {f'for {authority}' if authority else ''}, " \
-                     f"and where to find official documents. " \
-                     f"Note: For official documents, refer to {authority or 'the relevant regulatory authority'}'s website."
-    
-    elif response_type == "list":
-        base_prompt = f"Provide a bullet-point list{authority_context} about: {query}\n\n" \
-                     f"Format: 4-6 key points, concise. Note: This is general knowledge, not official guidance."
-    
-    elif response_type == "summary":
-        base_prompt = f"Provide a brief summary{authority_context} about: {query}\n\n" \
-                     f"Format: 2-3 sentences max. Note: For latest updates, check official regulatory authority websites."
-    
-    else:  # Fallback
-        base_prompt = query
-    
     print(f"[RESPONSE] Generating GENERAL response ({response_type})")
     
-    # Use AI service to generate response
+    # Use AI service to generate response with Groq
     answer = ai_service.generate_smart_answer(
-        query=base_prompt,
-        context="",
-        intent=intent
+        query=query,
+        context="",  # No context for general knowledge
+        intent=intent,
+        detected_authority=authority,
+        retrieval_metrics=retrieval_metrics
     )
     
     return answer
 
 
 def _generate_rag_response(query: str, context: str, intent: str, response_type: str, 
-                           authority: str, sources: list, num_sources: int) -> str:
+                           authority: str, sources: list, num_sources: int,
+                           retrieval_metrics: dict = None) -> str:
     """
     Generate response using documents from database (RAG mode).
-    Response is formatted based on response_type.
+    Response is formatted based on response_type with Groq Llama 3.
     """
     
     print(f"[RESPONSE] Generating RAG response ({response_type}) with {num_sources} document(s)")
     
-    # Build response prompt based on response_type
-    if response_type == "list":
-        system_prompt = f"""You are a regulatory expert. Format your response as a BULLET LIST.
-        
-Requirements:
-- 4-6 bullet points maximum
-- Each point concise (1-2 lines)
-- Based on provided documents
-- Include key regulatory requirements
-{"- Focus on " + authority + " regulations" if authority else ""}
-- DO NOT mention sources in bullets themselves"""
-    
-    elif response_type == "document":
-        system_prompt = f"""You are a regulatory expert. Create a concise DOCUMENT SUMMARY.
-
-Requirements:
-- 100-200 words exactly
-- Key facts and requirements from documents
-- Clear, professional tone
-- Include main concepts
-- DO NOT list sources inline (they appear separately)
-{"- Focus on " + authority + " perspective" if authority else ""}"""
-    
-    elif response_type == "explanation":
-        system_prompt = f"""You are a regulatory expert. Provide a STRUCTURED EXPLANATION.
-
-Requirements:
-- 3-4 key concepts explained
-- Clear hierarchy (concept → details → examples)
-- Based on provided regulatory documents
-- Professional, understandable tone
-{"- Explain in context of " + authority if authority else ""}"""
-    
-    elif response_type == "summary":
-        system_prompt = f"""You are a regulatory expert. Create a BRIEF SUMMARY.
-
-Requirements:
-- 2-3 sentences maximum
-- Most critical information only
-- Based on latest documents
-{"- Regarding " + authority if authority else ""}
-- Mention document date/source importance"""
-    
-    else:  # Fallback
-        system_prompt = f"""You are a regulatory expert. Answer based on these documents:
-        
-{context}
-
-Answer the query clearly and cite the documents when relevant."""
-    
-    full_prompt = system_prompt + "\n\nDocuments:\n" + context + "\n\nQuery: " + query
-    
-    # Generate response using AI service
-    answer = ai_service.generate_formatted_answer(
+    # Use AI service with full context and retrieval metrics
+    answer = ai_service.generate_smart_answer(
         query=query,
         context=context,
         intent=intent,
-        authority=authority,
-        sources=sources,
-        num_sources=num_sources
+        detected_authority=authority,
+        retrieval_metrics=retrieval_metrics
     )
     
     return answer
@@ -572,3 +504,25 @@ def get_analytics(db: Session = Depends(deps.get_db)):
         "queryClassification": query_classification,
     }
 
+
+@router.get("/pdf/{update_id}")
+def get_pdf(update_id: int, db: Session = Depends(deps.get_db)):
+    """Download PDF file for a specific update"""
+    from fastapi.responses import FileResponse
+    import os
+    
+    # Fetch update from database
+    update = db.query(Update).filter(Update.id == update_id).first()
+    
+    if not update:
+        return {"error": "Update not found"}
+    
+    if not update.pdf_file_path or not os.path.exists(update.pdf_file_path):
+        return {"error": "PDF file not found for this update"}
+    
+    # Return the PDF file
+    return FileResponse(
+        path=update.pdf_file_path,
+        filename=f"{update.title}.pdf",
+        media_type="application/pdf"
+    )

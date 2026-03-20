@@ -129,7 +129,7 @@ class FDAGuidelineScraper(BaseScraper):
             soup = self.fetch_page(url)
             
             if not soup:
-                return self._get_sample_fda_guidelines()
+                return []
             
             # Extract guidance documents
             guidance_links = soup.find_all("a", {"class": "result"})
@@ -170,10 +170,6 @@ class FDAGuidelineScraper(BaseScraper):
         except Exception as e:
             print(f"[FDA GUIDELINE] Error scraping FDA guidance: {e}")
         
-        # Return samples if no live data
-        if not updates:
-            updates = self._get_sample_fda_guidelines()
-        
         return updates
     
     def _get_sample_fda_guidelines(self) -> List[Dict[str, Any]]:
@@ -183,7 +179,7 @@ class FDAGuidelineScraper(BaseScraper):
                 "title": "FDA Guidance on INDs and NDAs",
                 "category": "Guidance",
                 "published_date": datetime.utcnow() - timedelta(days=30),
-                "source_link": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/guidance-industry-investigational-new-drug-applications",
+                "source_link": "https://www.fda.gov/search?s=FDA+Guidance+on+INDs+and+NDAs",
                 "full_text": "Comprehensive guidance on IND and NDA requirements, including CMC, pharmacology, and clinical evaluation",
                 "short_summary": "FDA guidance on investigational new drug and new drug application procedures",
                 "is_guideline": True
@@ -192,7 +188,7 @@ class FDAGuidelineScraper(BaseScraper):
                 "title": "FDA Guidance on Test Procedures and Analytical Methods",
                 "category": "Guidance",
                 "published_date": datetime.utcnow() - timedelta(days=60),
-                "source_link": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/guidance-industry-analytical-procedures-and-methods",
+                "source_link": "https://www.fda.gov/search?s=FDA+Guidance+on+Test+Procedures+and+Analytical+Methods",
                 "full_text": "Requirements for analytical test procedures, method development, validation, and applicability",
                 "short_summary": "FDA guidance on analytical procedures and method validation for drug submissions",
                 "is_guideline": True

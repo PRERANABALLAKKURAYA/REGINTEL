@@ -198,45 +198,49 @@ export default function UpdatesPage() {
         {/* Updates List */}
         <div className="space-y-4">
           {paginatedUpdates.map((update) => (
-            <div
+            <Link
               key={update.id}
-              className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition"
+              href={`/dashboard/update/${update.id}`}
+              className="block"
             >
-              <div className="flex justify-between items-start">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="px-3 py-1 bg-cyan-100 text-cyan-800 text-xs font-semibold rounded">
-                      {update.authority?.name || "Unknown"}
-                    </span>
-                    <span className="px-3 py-1 bg-gray-100 text-gray-800 text-xs font-semibold rounded">
-                      {update.category}
-                    </span>
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                    {update.title}
-                  </h3>
-                  {update.short_summary && (
-                    <p className="text-gray-600 text-sm mb-3">
-                      {update.short_summary.substring(0, 150)}
-                      {update.short_summary.length > 150 ? "..." : ""}
-                    </p>
-                  )}
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>
-                      {new Date(update.published_date).toLocaleDateString()}
-                    </span>
-                    <a
-                      href={update.source_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-cyan-600 hover:underline"
-                    >
-                      View Source →
-                    </a>
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition cursor-pointer hover:bg-gray-50">
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="px-3 py-1 bg-cyan-100 text-cyan-800 text-xs font-semibold rounded">
+                        {update.authority?.name || "Unknown"}
+                      </span>
+                      <span className="px-3 py-1 bg-gray-100 text-gray-800 text-xs font-semibold rounded">
+                        {update.category}
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      {update.title}
+                    </h3>
+                    {update.short_summary && (
+                      <p className="text-gray-600 text-sm mb-3">
+                        {update.short_summary.substring(0, 150)}
+                        {update.short_summary.length > 150 ? "..." : ""}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-4 text-xs text-gray-500">
+                      <span>
+                        {new Date(update.published_date).toLocaleDateString()}
+                      </span>
+                      <a
+                        href={update.source_link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-600 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        View Source →
+                      </a>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
 
