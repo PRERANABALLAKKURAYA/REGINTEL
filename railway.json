@@ -5,7 +5,7 @@
     "context": "./backend"
   },
   "deploy": {
-    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+    "startCommand": "sh -c 'exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'",
     "numReplicas": 1,
     "restartPolicyType": "on_failure",
     "restartPolicyMaxRetries": 3
