@@ -1,27 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<any>(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.push("/auth");
-    }
     setUser({ email: "user@company.com", name: "Regulatory Expert" });
-  }, [router]);
-
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    router.push("/auth");
-  };
+  }, []);
 
   // Check if route is active
   const isActive = (href: string) => {
@@ -73,10 +63,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <p className="text-sm font-semibold text-[#00d9ff] truncate mt-1">{user?.email}</p>
           </div>
           <button
-            onClick={handleLogout}
-            className="w-full px-4 py-2 text-sm bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg font-medium transition"
+            disabled
+            className="w-full px-4 py-2 text-sm bg-slate-500/20 text-slate-300 rounded-lg font-medium cursor-default"
           >
-            Sign Out
+            Demo Mode (No Logout)
           </button>
         </div>
       </aside>
