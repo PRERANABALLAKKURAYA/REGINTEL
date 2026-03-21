@@ -41,20 +41,45 @@ class AIService:
                 traceback.print_exc()
                 self.client = None
         
-        # System prompt for pharmaceutical regulatory assistant
-        self.system_prompt = """You are a pharmaceutical regulatory intelligence assistant specializing in FDA, EMA, MHRA, PMDA, CDSCO, NMPA, and ICH regulations.
+        # System prompt template (formatted per request with query + context)
+        self.system_prompt_template = """You are an expert Regulatory Intelligence Assistant specializing in pharmaceutical regulations.
 
-Your role:
-- Answer questions about pharmaceutical regulations and guidelines
-- Use database context when provided (RAG mode)
-- Provide general regulatory knowledge when no context available
-- Deliver structured, concise responses (100-200 words)
-- Be accurate and cite specific details from documents
+    User Query:
+    {query}
 
-Response format:
-- Main heading in bold
-- 2-3 key bullet points
-- Specific facts only (no generic theory)"""
+    Context (if available):
+    {context}
+
+    Instructions:
+    - Use provided context FIRST (if available)
+    - If context is insufficient, use domain knowledge (ICH, FDA, EMA, CDSCO, WHO)
+    - Give detailed, specific, and practical answers
+    - Avoid generic textbook statements
+    - Do NOT say \"consult official sources\" unless absolutely necessary
+    - Prefer explaining directly instead of redirecting the user
+
+    Response Guidelines:
+    - Be clear and informative
+    - Use structured formatting ONLY when useful
+    - Include:
+      - Key insights
+      - Relevant regulations or guidelines (e.g., ICH Q1A, FDA 21 CFR)
+      - Region-specific differences if applicable
+      - Practical interpretation (what it means in real life)
+
+    Formatting:
+    - Use clean bullet points or paragraphs
+    - Avoid excessive markdown like ** or ###
+    - Keep it readable for UI display
+
+    Tone:
+    - Confident, expert-level
+    - Helpful, not defensive
+
+    IMPORTANT:
+    - Do NOT over-structure responses
+    - Do NOT force sections if not needed
+    - Focus on usefulness over format"""
 
     def generate_smart_answer(
         self,
@@ -94,6 +119,13 @@ Response format:
             return self._generate_fallback_answer(query, context, intent, detected_authority)
         
         try:
+            # Build request-specific system prompt with injected query/context
+            context_for_prompt = context.strip() if context and context.strip() else "No additional context provided."
+            system_prompt = self.system_prompt_template.format(
+                query=query.strip(),
+                context=context_for_prompt
+            )
+
             # Determine mode: RAG or General Knowledge
             if context.strip() and retrieval_metrics and retrieval_metrics.get("documents_injected", 0) > 0:
                 mode = "RAG"
@@ -111,7 +143,7 @@ Response format:
             # Call Groq API
             chat_completion = self.client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": self.system_prompt},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
                 model="llama-3.3-70b-versatile",
@@ -148,23 +180,18 @@ Response format:
         authority_str = authority if authority else "Multiple authorities"
         num_docs = metrics.get("documents_injected", 0)
         
-        prompt = f"""Query: {query}
+        prompt = f"""Use this context first and answer naturally.
 
-Detected Authority: {authority_str}
+    Query: {query}
+    Detected Authority: {authority_str}
+    Documents Retrieved: {num_docs}
 
-Retrieved Documents ({num_docs} documents from database):
----
-{context}
----
+    Context:
+    ---
+    {context}
+    ---
 
-Instructions:
-1. Answer the user's question using ONLY the information from the documents above
-2. Synthesize information from multiple documents if relevant
-3. Cite specific details (dates, authorities, key points)
-4. Keep response concise (100-200 words)
-5. If documents don't fully answer the question, acknowledge limitations
-
-Provide a structured, professional response based on these documents."""
+    Answer with practical regulatory interpretation, specific references where relevant, and region differences only if they help the user."""
         
         return prompt
 
@@ -180,17 +207,9 @@ Provide a structured, professional response based on these documents."""
         
         prompt = f"""Query: {query}
 
-Context: No specific documents were retrieved from the database{authority_str}.
+    No high-confidence document context was retrieved{authority_str}.
 
-Instructions:
-1. Answer using your general knowledge of pharmaceutical regulations
-2. Provide accurate, factual information about regulatory processes
-3. Keep response concise (100-200 words)
-4. Structure with clear headings and bullet points
-5. Acknowledge if you're providing general information vs. specific updates
-6. Suggest where users can find official information
-
-Provide a helpful, structured response using general regulatory knowledge."""
+    Provide a direct, expert answer using domain knowledge (ICH, FDA, EMA, CDSCO, WHO). Keep it specific, practical, and avoid generic textbook phrasing."""
         
         return prompt
 
@@ -202,110 +221,74 @@ Provide a helpful, structured response using general regulatory knowledge."""
         authority: Optional[str] = None
     ) -> str:
         """
-        Generate static fallback response when Groq API unavailable
+        Generate practical fallback response when Groq API is unavailable.
+        Keep responses useful and non-generic even without live LLM generation.
         """
-        print("[AI SERVICE] Generating fallback static response")
-        
+        print("[AI SERVICE] Generating fallback practical response")
+
         query_lower = query.lower()
-        authority_name = authority if authority else "regulatory authorities"
-        
-        # If we have context (documents), acknowledge them
+        authority_name = authority if authority else "relevant authority"
+
         if context.strip():
-            return f"""**{authority_name.upper()} Information**
+            lines = [line.strip() for line in context.splitlines() if line.strip()]
+            condensed = []
+            for line in lines:
+                if line.startswith("Title:") or line.startswith("Authority:") or line.startswith("Date:") or line.startswith("Category:"):
+                    condensed.append(line)
+                if len(condensed) >= 8:
+                    break
 
-Based on retrieved regulatory documents:
+            context_preview = "\n".join(condensed) if condensed else "Document context is available but could not be condensed."
+            return (
+                "AI model is temporarily unavailable, so this answer is based on retrieved regulatory context only.\n\n"
+                f"Query focus: {query}\n"
+                f"Authority focus: {authority_name}\n\n"
+                "Most relevant context found:\n"
+                f"{context_preview}\n\n"
+                "Practical interpretation:\n"
+                "- Use the latest item dates to prioritize implementation order.\n"
+                "- Map each document title to affected SOPs, labeling, submission modules, or vigilance workflows.\n"
+                "- If there are multiple regions, align to the strictest requirement first to reduce rework."
+            )
 
-• Key regulatory requirements and guidelines applicable to your query
-• Specific compliance timelines and implementation details
-• Official documentation and reference materials
+        if "biosimilar" in query_lower or "biosimilar" in query_lower:
+            return (
+                "Biosimilar expectations typically center on a totality-of-evidence approach.\n\n"
+                "Key insights:\n"
+                "- FDA pathway is under 351(k) with emphasis on analytical similarity, then targeted nonclinical/clinical residual uncertainty.\n"
+                "- EMA framework also uses stepwise comparability, often expecting robust quality comparability and tailored clinical confirmation where needed.\n"
+                "- ICH Q5E comparability principles are practically useful when evaluating manufacturing or post-change similarity logic.\n\n"
+                "Practical interpretation: build development plans around analytical similarity first, then justify any reduced clinical package with a strong residual-uncertainty narrative."
+            )
 
-**Note:** AI service temporarily unavailable. This response is based on document retrieval only. For detailed analysis, please retry or consult official {authority_name} sources directly.
+        if "stability" in query_lower or "zone iv" in query_lower:
+            return (
+                "For stability strategy, anchor on ICH Q1A(R2) and regional implementation details.\n\n"
+                "Key insights:\n"
+                "- Long-term and accelerated conditions should support shelf-life and label storage statements.\n"
+                "- Zone IV programs often require hot/humid condition coverage and packaging-performance evidence.\n"
+                "- FDA and EMA expectations are broadly aligned to ICH, but filing practices and deficiency focus can differ by review division and product type.\n\n"
+                "Practical interpretation: pre-empt review questions by linking stability trends to specification strategy, transport stress, and container closure performance."
+            )
 
-**Recommended Action:** Check official {authority_name} website for complete information."""
-        
-        # General knowledge responses for common queries
-        if "fda" in query_lower or "approval" in query_lower:
-            return """**FDA Regulatory Overview**
+        if "clinical trial" in query_lower or "gcp" in query_lower:
+            return (
+                "Clinical trial compliance should be framed around ICH E6(R2/R3 transition), informed consent controls, and safety reporting governance.\n\n"
+                "Key insights:\n"
+                "- FDA: 21 CFR Parts 50, 56, 312 remain core for drug trials.\n"
+                "- EU/EMA environment: CTR 536/2014 operational requirements affect submissions and transparency workflows.\n"
+                "- Risk-based quality management is expected in modern GCP operations.\n\n"
+                "Practical interpretation: align protocol deviations, vendor oversight, and pharmacovigilance interfaces before first-patient-in to avoid inspection findings."
+            )
 
-The FDA (Food and Drug Administration) regulates:
-
-• **Drug Approval:** IND → NDA/BLA submission → FDA review → Market authorization
-• **Key Requirements:** Clinical data, safety profile, manufacturing compliance
-• **Timeline:** Typically 10-12 months for standard review, 6 months for priority
-
-**Official Resources:**
-- FDA.gov for current guidelines
-- Drugs@FDA database for approved products
-- CDER for drug-specific regulations
-
-**Note:** For current updates and specific guidance, consult FDA official channels."""
-        
-        elif "ema" in query_lower:
-            return """**EMA Regulatory Overview**
-
-The European Medicines Agency (EMA) provides:
-
-• **Centralized Procedure:** Single marketing authorization valid across EU
-• **Key Requirements:** Quality, safety, efficacy dossiers (CTD format)
-• **CHMP Review:** Scientific assessment by Committee for Medicinal Products
-
-**Official Resources:**
-- EMA.europa.eu for guidelines
-- EU Clinical Trials Register
-- Eudralex for EU pharmaceutical legislation
-
-**Note:** For current updates and specific guidance, consult EMA official channels."""
-        
-        elif "gmp" in query_lower or "manufacturing" in query_lower:
-            return """**GMP (Good Manufacturing Practice) Overview**
-
-Key GMP requirements for pharmaceutical manufacturing:
-
-• **Facility Standards:** Controlled environments, validated equipment
-• **Personnel:** Trained staff, documented procedures
-• **Quality Control:** Batch testing, release procedures
-• **Documentation:** Complete records, deviation management
-
-**Applicable Standards:**
-- FDA: 21 CFR Parts 210 & 211
-- EMA: Eudralex Volume 4
-- ICH Q7: Active Pharmaceutical Ingredients
-
-**Note:** For specific GMP requirements, consult authority-specific guidelines."""
-        
-        elif "clinical trial" in query_lower:
-            return """**Clinical Trials Regulatory Framework**
-
-Regulatory requirements for clinical trials:
-
-• **Phase I-III:** Safety, efficacy, dosing studies
-• **IND/CTA:** Regulatory approval before starting trials
-• **GCP Compliance:** Good Clinical Practice standards (ICH E6)
-• **Ethics Review:** IRB/EC approval mandatory
-
-**Key Regulations:**
-- FDA: 21 CFR Parts 50, 56, 312
-- EMA: Clinical Trials Regulation (EU) No 536/2014
-- ICH GCP guidelines
-
-**Note:** For current trial requirements, consult relevant regulatory authority."""
-        
-        else:
-            # Generic regulatory response
-            return f"""**Regulatory Intelligence Response**
-
-Based on your query regarding {authority_name}:
-
-• Pharmaceutical regulations ensure safety, efficacy, and quality of medicinal products
-• Specific requirements vary by region (FDA, EMA, MHRA, PMDA, etc.)
-• Compliance requires understanding current guidelines and implementation timelines
-
-**Recommended Actions:**
-1. Identify applicable regulatory authority
-2. Review official guidelines and regulations
-3. Consult regulatory professionals for specific compliance questions
-
-**Note:** For current, authoritative information, always refer to official regulatory body websites and published guidance documents."""
+        return (
+            f"Your query is about {query}.\n\n"
+            "Without live model generation, here is a direct regulatory interpretation:\n"
+            "- Identify the governing framework first (for example ICH quality/safety/efficacy guidance, FDA 21 CFR, EMA/CTR, or CDSCO schedules).\n"
+            "- Determine the submission-impacting elements: data package, CMC controls, labeling, timelines, and post-approval obligations.\n"
+            "- Compare region-specific differences only where they change dossier design or operational execution.\n\n"
+            "Practical interpretation: convert the question into a compliance action list with owners, due dates, and evidence artifacts for audit readiness."
+        )
 
     def analyze_update(
         self,
