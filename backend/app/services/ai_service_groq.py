@@ -42,7 +42,7 @@ class AIService:
                 self.client = None
         
         # System prompt template (formatted per request with query + context)
-                self.system_prompt_template = """You are a Regulatory Intelligence Assistant.
+        self.system_prompt_template = """You are a Regulatory Intelligence Assistant.
 
 User Query: {query}
 Context: {context}
