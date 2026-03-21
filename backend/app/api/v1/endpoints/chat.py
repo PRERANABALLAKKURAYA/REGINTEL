@@ -29,6 +29,10 @@ AUTHORITY_NAMES = {
     'nmpa': 'NMPA'
 }
 
+LATEST_QUERY_TERMS = {
+    "latest", "recent", "new", "update", "updates", "current", "newest"
+}
+
 class ChatRequest(BaseModel):
     query: str
 
@@ -64,6 +68,21 @@ def extract_authority_from_query(query: str) -> tuple[str | None, int | None]:
             return (authority_name, None)  # Will be resolved to ID in DB query
     
     return (None, None)
+
+
+def understand_query(query: str) -> tuple[str, str | None]:
+    """
+    Detect query mode and requested authority.
+
+    Modes:
+    - latest: query asks for recent updates
+    - standard: default
+    """
+    query_lower = query.lower()
+    requested_authority, _ = extract_authority_from_query(query)
+    mode = "latest" if any(term in query_lower for term in LATEST_QUERY_TERMS) else "standard"
+    print(f"[QUERY UNDERSTANDING] mode={mode} | authority={requested_authority or 'None'}")
+    return mode, requested_authority
 
 def classify_query_type(query: str) -> tuple[str, str]:
     """
@@ -164,12 +183,13 @@ def chat_query(request: ChatRequest, db: Session = Depends(deps.get_db)):
     intent, response_type = classify_query_type(request.query)
     print(f"[INTENT] {intent} | [RESPONSE TYPE] {response_type}")
     
-    # STEP 2: Extract authority if specified
-    requested_authority, _ = extract_authority_from_query(request.query)
+    # STEP 2: Understand mode + authority
+    query_mode, requested_authority = understand_query(request.query)
     print(f"[AUTHORITY] {requested_authority or 'None (Multi-authority)'}")
+    print(f"[QUERY MODE] {query_mode}")
     
     # STEP 3: Determine if we should attempt database retrieval
-    should_retrieve_from_db = intent != "GENERAL_KNOWLEDGE"
+    should_retrieve_from_db = intent != "GENERAL_KNOWLEDGE" or query_mode == "latest" or requested_authority is not None
     print(f"[RETRIEVAL] DB required: {should_retrieve_from_db}")
     
     # STEP 4: Attempt database retrieval if appropriate
@@ -181,7 +201,8 @@ def chat_query(request: ChatRequest, db: Session = Depends(deps.get_db)):
         relevant_updates, retrieval_metrics = _retrieve_documents(
             db=db,
             query=request.query,
-            requested_authority=requested_authority
+            requested_authority=requested_authority,
+            query_mode=query_mode
         )
         
         # HYBRID LOGIC: Decide based on retrieval metrics
@@ -236,6 +257,7 @@ Content: {update.short_summary or update.full_text[:300]}"""
         sources=source_links,
         mode=retrieval_mode,
         num_sources=len(relevant_updates),
+        query_mode=query_mode,
         retrieval_metrics=retrieval_metrics
     )
     
@@ -297,7 +319,7 @@ Content: {update.short_summary or update.full_text[:300]}"""
     
     return {"answer": answer, "sources": sources, "pdfs": pdfs}
 
-def _retrieve_documents(db: Session, query: str, requested_authority: str = None) -> tuple[list, dict]:
+def _retrieve_documents(db: Session, query: str, requested_authority: str = None, query_mode: str = "standard") -> tuple[list, dict]:
     """
     Retrieve documents from database using improved RAG service with semantic search
     Returns: (documents, retrieval_metrics)
@@ -319,6 +341,9 @@ def _retrieve_documents(db: Session, query: str, requested_authority: str = None
     base_query = db.query(Update).join(Authority, Update.authority_id == Authority.id)
     
     try:
+        if requested_authority:
+            base_query = base_query.filter(func.lower(Authority.name) == requested_authority.lower())
+
         all_updates = base_query.order_by(Update.published_date.desc()).all()
         print(f"[RETRIEVAL] Loaded {len(all_updates)} documents from database")
         
@@ -347,8 +372,14 @@ def _retrieve_documents(db: Session, query: str, requested_authority: str = None
         print(f"[RETRIEVAL ERROR] Failed to load documents: {e}")
         return [], {"mode_used": "GENERAL_KNOWLEDGE", "error": str(e)}
     
-    # STEP 3: Perform semantic search with authority detection
-    retrieved_docs, metrics = rag_service.search(query, k=3, min_score=0.35)
+    # STEP 3: Perform semantic search with authority detection + optional recency prioritization
+    retrieved_docs, metrics = rag_service.search(
+        query,
+        k=3,
+        min_score=0.35,
+        prefer_recent=(query_mode == "latest"),
+        forced_authority=requested_authority
+    )
     
     print(f"[RETRIEVAL] Retrieved {len(retrieved_docs)} documents")
     print(f"[RETRIEVAL] Metrics: {metrics}")
@@ -358,9 +389,13 @@ def _retrieve_documents(db: Session, query: str, requested_authority: str = None
     if retrieved_docs:
         doc_ids = [doc['id'] for doc in retrieved_docs]
         selected_updates = [u for u in all_updates if u.id in doc_ids]
-        # Sort by original retrieval order
-        id_order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
-        selected_updates.sort(key=lambda u: id_order.get(u.id, 999))
+        if query_mode == "latest":
+            selected_updates.sort(key=lambda u: u.published_date or datetime.min, reverse=True)
+            metrics["sorted_by"] = "published_date_desc"
+        else:
+            # Sort by original retrieval order
+            id_order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+            selected_updates.sort(key=lambda u: id_order.get(u.id, 999))
     
     print(f"[RETRIEVAL] Final: {len(selected_updates)} Update objects mapped")
     
@@ -369,6 +404,7 @@ def _retrieve_documents(db: Session, query: str, requested_authority: str = None
 
 def _generate_hybrid_response(query: str, context: str, intent: str, response_type: str, 
                               authority: str, sources: list, mode: str, num_sources: int,
+                              query_mode: str = "standard",
                               retrieval_metrics: dict = None) -> str:
     """
     Generate response based on mode (RAG vs GENERAL_GPT) and response type.
@@ -382,13 +418,14 @@ def _generate_hybrid_response(query: str, context: str, intent: str, response_ty
     
     if mode == "GENERAL_GPT":
         # General knowledge response (no documents)
-        return _generate_general_response(query, intent, response_type, authority, retrieval_metrics)
+        return _generate_general_response(query, intent, response_type, authority, query_mode, retrieval_metrics)
     else:
         # RAG response (with documents)
-        return _generate_rag_response(query, context, intent, response_type, authority, sources, num_sources, retrieval_metrics)
+        return _generate_rag_response(query, context, intent, response_type, authority, sources, num_sources, query_mode, retrieval_metrics)
 
 
 def _generate_general_response(query: str, intent: str, response_type: str, authority: str = None,
+                               query_mode: str = "standard",
                                retrieval_metrics: dict = None) -> str:
     """
     Generate response using general LLM knowledge without database documents.
@@ -396,20 +433,32 @@ def _generate_general_response(query: str, intent: str, response_type: str, auth
     """
     print(f"[RESPONSE] Generating GENERAL response ({response_type})")
     
+    # If latest-mode requested but no updates found, use explicit fallback preface.
+    latest_no_data_prefix = None
+    if query_mode == "latest" and authority:
+        docs_injected = (retrieval_metrics or {}).get("documents_injected", 0)
+        if docs_injected == 0:
+            latest_no_data_prefix = f"No recent {authority}-specific updates found. Here is the most relevant current guidance:"
+
     # Use AI service to generate response with Groq
     answer = ai_service.generate_smart_answer(
         query=query,
         context="",  # No context for general knowledge
         intent=intent,
         detected_authority=authority,
+        query_mode=query_mode,
         retrieval_metrics=retrieval_metrics
     )
-    
+
+    if latest_no_data_prefix:
+        return f"{latest_no_data_prefix}\n\n{answer}"
+
     return answer
 
 
 def _generate_rag_response(query: str, context: str, intent: str, response_type: str, 
                            authority: str, sources: list, num_sources: int,
+                           query_mode: str = "standard",
                            retrieval_metrics: dict = None) -> str:
     """
     Generate response using documents from database (RAG mode).
@@ -424,6 +473,7 @@ def _generate_rag_response(query: str, context: str, intent: str, response_type:
         context=context,
         intent=intent,
         detected_authority=authority,
+        query_mode=query_mode,
         retrieval_metrics=retrieval_metrics
     )
     

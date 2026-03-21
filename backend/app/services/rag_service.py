@@ -126,7 +126,9 @@ class RAGService:
         self, 
         query: str, 
         k: int = 3, 
-        min_score: float = COSINE_SIMILARITY_THRESHOLD
+        min_score: float = COSINE_SIMILARITY_THRESHOLD,
+        prefer_recent: bool = False,
+        forced_authority: Optional[str] = None
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         IMPROVED SEMANTIC SEARCH PIPELINE with Authority Detection
@@ -148,7 +150,7 @@ class RAGService:
             (documents, metrics) - Retrieved documents and detailed metrics
         """
         print(f"\n[RAG SEARCH] Query: {query[:100]}...")
-        print(f"[RAG SEARCH] Parameters: k={k}, threshold={min_score}")
+        print(f"[RAG SEARCH] Parameters: k={k}, threshold={min_score}, prefer_recent={prefer_recent}, forced_authority={forced_authority}")
         
         if not self.documents:
             print("[RAG] No documents in index")
@@ -164,7 +166,7 @@ class RAGService:
             return [], self.last_retrieval_metrics
 
         # STEP 1: Detect authority in query
-        detected_authority = self.detect_authority(query)
+        detected_authority = forced_authority or self.detect_authority(query)
         
         # STEP 2: Filter documents by authority if detected
         search_docs = self.documents
@@ -233,7 +235,20 @@ class RAGService:
             }
             return [], self.last_retrieval_metrics
         
-        # STEP 6: Limit to top K documents
+        # STEP 6: Optional recency prioritization for "latest/recent" queries
+        if prefer_recent:
+            def parse_date(doc: Dict[str, Any]) -> datetime:
+                try:
+                    raw = (doc.get("metadata", {}) or {}).get("published_date")
+                    if raw:
+                        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+                return datetime.min
+
+            above_threshold.sort(key=lambda item: parse_date(item[2]), reverse=True)
+
+        # STEP 7: Limit to top K documents
         result = [doc for _, _, doc in above_threshold[:k]]
         
         # Log final retrieval metrics
@@ -247,6 +262,8 @@ class RAGService:
             "threshold_used": min_score,
             "max_documents_limit": k
         }
+        if prefer_recent:
+            self.last_retrieval_metrics["sorted_by"] = "published_date_desc"
         
         print(f"[RAG INJECTION] Injecting {len(result)} documents into LLM context")
         print(f"[RAG METRICS] {self.last_retrieval_metrics}\n")

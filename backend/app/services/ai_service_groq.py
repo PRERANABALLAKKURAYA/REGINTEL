@@ -42,44 +42,34 @@ class AIService:
                 self.client = None
         
         # System prompt template (formatted per request with query + context)
-        self.system_prompt_template = """You are an expert Regulatory Intelligence Assistant specializing in pharmaceutical regulations.
+                self.system_prompt_template = """You are a Regulatory Intelligence Assistant.
 
-    User Query:
-    {query}
+User Query: {query}
+Context: {context}
+Query Mode: {query_mode}
+Detected Authority: {authority}
 
-    Context (if available):
-    {context}
+Instructions:
+- Identify regulatory authority mentioned (FDA, EMA, ICH, etc.)
+- Focus ONLY on that authority unless comparison is explicitly asked
+- If query includes "latest" or "recent":
+    - Prioritize recent regulatory updates, guidelines, or policy changes
+    - Mention years or document names if possible
+- DO NOT give general textbook explanations unless no data exists
+- If context is available:
+    - Use it FIRST
+    - Extract specific facts
+- If context is missing:
+    - Use domain knowledge BUT stay specific to authority
 
-    Instructions:
-    - Use provided context FIRST (if available)
-    - If context is insufficient, use domain knowledge (ICH, FDA, EMA, CDSCO, WHO)
-    - Give detailed, specific, and practical answers
-    - Avoid generic textbook statements
-    - Do NOT say \"consult official sources\" unless absolutely necessary
-    - Prefer explaining directly instead of redirecting the user
-
-    Response Guidelines:
-    - Be clear and informative
-    - Use structured formatting ONLY when useful
-    - Include:
-      - Key insights
-      - Relevant regulations or guidelines (e.g., ICH Q1A, FDA 21 CFR)
-      - Region-specific differences if applicable
-      - Practical interpretation (what it means in real life)
-
-    Formatting:
-    - Use clean bullet points or paragraphs
-    - Avoid excessive markdown like ** or ###
-    - Keep it readable for UI display
-
-    Tone:
-    - Confident, expert-level
-    - Helpful, not defensive
-
-    IMPORTANT:
-    - Do NOT over-structure responses
-    - Do NOT force sections if not needed
-    - Focus on usefulness over format"""
+Response Format:
+- Start with a direct answer
+- Then provide:
+    - Key updates / guidelines
+    - Relevant regulation references (e.g., 351(k), FDA guidance docs)
+    - Practical implications
+- Avoid mentioning other authorities (EMA, ICH) unless asked
+- Avoid vague phrases like "consult official sources""" 
 
     def generate_smart_answer(
         self,
@@ -87,6 +77,7 @@ class AIService:
         context: str = "",
         intent: str = "GENERAL_KNOWLEDGE",
         detected_authority: Optional[str] = None,
+        query_mode: str = "standard",
         retrieval_metrics: Optional[Dict[str, Any]] = None
     ) -> str:
         """
@@ -106,6 +97,7 @@ class AIService:
         print(f"[AI SERVICE] Query: {query[:80]}...")
         print(f"[AI SERVICE] Intent: {intent}")
         print(f"[AI SERVICE] Detected Authority: {detected_authority}")
+        print(f"[AI SERVICE] Query Mode: {query_mode}")
         print(f"[AI SERVICE] Context length: {len(context)} chars")
         print(f"[AI SERVICE] Client available: {self.client is not None}")
         
@@ -116,25 +108,27 @@ class AIService:
         # Check if we have valid Groq client
         if not self.client:
             print("[AI SERVICE] ⚠️  No Groq client available - using fallback")
-            return self._generate_fallback_answer(query, context, intent, detected_authority)
+            return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
         
         try:
             # Build request-specific system prompt with injected query/context
             context_for_prompt = context.strip() if context and context.strip() else "No additional context provided."
             system_prompt = self.system_prompt_template.format(
                 query=query.strip(),
-                context=context_for_prompt
+                context=context_for_prompt,
+                query_mode=query_mode,
+                authority=detected_authority or "Not specified"
             )
 
             # Determine mode: RAG or General Knowledge
             if context.strip() and retrieval_metrics and retrieval_metrics.get("documents_injected", 0) > 0:
                 mode = "RAG"
                 print(f"[AI SERVICE] MODE: RAG (injecting {retrieval_metrics['documents_injected']} documents)")
-                user_message = self._build_rag_prompt(query, context, detected_authority, retrieval_metrics)
+                user_message = self._build_rag_prompt(query, context, detected_authority, query_mode, retrieval_metrics)
             else:
                 mode = "GENERAL_KNOWLEDGE"
                 print(f"[AI SERVICE] MODE: GENERAL_KNOWLEDGE (no document injection)")
-                user_message = self._build_general_prompt(query, detected_authority)
+                user_message = self._build_general_prompt(query, detected_authority, query_mode)
             
             # Log prompt details
             print(f"[AI SERVICE] User message length: {len(user_message)} chars")
@@ -165,13 +159,14 @@ class AIService:
             import traceback
             traceback.print_exc()
             print(f"[AI SERVICE] Falling back to static response")
-            return self._generate_fallback_answer(query, context, intent, detected_authority)
+            return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
 
     def _build_rag_prompt(
         self,
         query: str,
         context: str,
         authority: Optional[str],
+        query_mode: str,
         metrics: Dict[str, Any]
     ) -> str:
         """
@@ -184,6 +179,7 @@ class AIService:
 
     Query: {query}
     Detected Authority: {authority_str}
+    Query Mode: {query_mode}
     Documents Retrieved: {num_docs}
 
     Context:
@@ -198,7 +194,8 @@ class AIService:
     def _build_general_prompt(
         self,
         query: str,
-        authority: Optional[str]
+        authority: Optional[str],
+        query_mode: str
     ) -> str:
         """
         Build prompt for general knowledge mode (no documents)
@@ -206,10 +203,11 @@ class AIService:
         authority_str = f" regarding {authority}" if authority else ""
         
         prompt = f"""Query: {query}
+    Query Mode: {query_mode}
 
     No high-confidence document context was retrieved{authority_str}.
 
-    Provide a direct, expert answer using domain knowledge (ICH, FDA, EMA, CDSCO, WHO). Keep it specific, practical, and avoid generic textbook phrasing."""
+    Provide a direct, expert answer using domain knowledge while staying specific to the detected authority. Avoid generic textbook phrasing and avoid cross-authority comparisons unless requested."""
         
         return prompt
 
@@ -218,7 +216,8 @@ class AIService:
         query: str,
         context: str,
         intent: str,
-        authority: Optional[str] = None
+        authority: Optional[str] = None,
+        query_mode: str = "standard"
     ) -> str:
         """
         Generate practical fallback response when Groq API is unavailable.
@@ -249,6 +248,16 @@ class AIService:
                 "- Use the latest item dates to prioritize implementation order.\n"
                 "- Map each document title to affected SOPs, labeling, submission modules, or vigilance workflows.\n"
                 "- If there are multiple regions, align to the strictest requirement first to reduce rework."
+            )
+
+        if query_mode == "latest" and authority:
+            return (
+                f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n"
+                f"For {authority}, focus on the most recent applicable guidance framework tied to your query, then map requirements to submission content, lifecycle controls, and post-approval obligations.\n\n"
+                "Practical implications:\n"
+                "- Confirm the governing pathway and legal basis first.\n"
+                "- Translate guidance into actionable dossier sections and evidence requirements.\n"
+                "- Prioritize implementation by compliance risk and submission timelines."
             )
 
         if "biosimilar" in query_lower or "biosimilar" in query_lower:
