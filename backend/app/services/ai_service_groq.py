@@ -34,7 +34,7 @@ class AIService:
         else:
             try:
                 self.client = Groq(api_key=self.api_key)
-                print("[AI SERVICE] ✓ Groq client initialized successfully")
+                print("[AI SERVICE] Groq client initialized successfully")
             except Exception as e:
                 print(f"[AI SERVICE] ERROR initializing Groq: {e}")
                 import traceback
@@ -107,7 +107,7 @@ Response Format:
         
         # Check if we have valid Groq client
         if not self.client:
-            print("[AI SERVICE] ⚠️  No Groq client available - using fallback")
+            print("[AI SERVICE] No Groq client available - using fallback")
             return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
         
         try:
@@ -148,14 +148,14 @@ Response Format:
             )
             
             answer = chat_completion.choices[0].message.content
-            print(f"[AI SERVICE] ✓ Response received: {len(answer)} chars")
+            print(f"[AI SERVICE] Response received: {len(answer)} chars")
             print(f"[AI SERVICE] Finish reason: {chat_completion.choices[0].finish_reason}")
             print(f"[AI SERVICE] Tokens used: {chat_completion.usage.total_tokens if chat_completion.usage else 'N/A'}")
             
             return answer
             
         except Exception as e:
-            print(f"[AI SERVICE] ❌ Groq API error: {type(e).__name__}: {str(e)}")
+            print(f"[AI SERVICE] Groq API error: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             print(f"[AI SERVICE] Falling back to static response")
@@ -397,15 +397,15 @@ RISK_LEVEL: [High/Medium/Low]"""
                     max_tokens=1000,
                 )
                 result_text = response.choices[0].message.content
-                print(f"[AI SERVICE] ✓ Groq analysis response received, parsing...")
+                print(f"[AI SERVICE] Groq analysis response received, parsing...")
                 return self._parse_analysis_response(result_text, difficulty_level)
             except Exception as e:
-                print(f"[AI SERVICE] ❌ Groq error: {e}, using mock response")
+                print(f"[AI SERVICE] Groq error: {e}, using mock response")
                 import traceback
                 traceback.print_exc()
         
         # Fall back to high-quality mock responses
-        print(f"[AI SERVICE] ⚠️  No Groq client, using mock analysis")
+        print(f"[AI SERVICE] No Groq client, using mock analysis")
         return self._generate_mock_analysis(update_title, update_summary, difficulty_level)
 
     def _parse_analysis_response(self, response_text: str, difficulty_level: str) -> dict:
@@ -461,7 +461,7 @@ RISK_LEVEL: [High/Medium/Low]"""
                 "risk_level": risk_level
             }
         except Exception as e:
-            print(f"[AI SERVICE] ❌ Parse error: {e}")
+            print(f"[AI SERVICE] Parse error: {e}")
             return {
                 "summary": response_text[:400],
                 "action_items": ["Review full update", "Assess impact", "Implement changes"],

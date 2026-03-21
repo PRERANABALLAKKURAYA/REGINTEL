@@ -3,7 +3,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from datetime import datetime, timedelta
+import asyncio
+import time
+import re
+from urllib.parse import urlparse, parse_qs, unquote
 import numpy as np
+import httpx
+from bs4 import BeautifulSoup
 from app.api import deps
 from app.services.ai_service_groq import ai_service
 from app.services.rag_service import rag_service
@@ -17,6 +23,9 @@ router = APIRouter()
 # Similarity threshold for document retrieval
 COSINE_SIMILARITY_THRESHOLD = 0.75
 MAX_DOCUMENTS_INJECTED = 3
+MAX_WEB_FETCH_SECONDS = 3.0
+MAX_WEB_PAGES = 3
+WEB_CONTEXT_CHAR_LIMIT = 6000
 
 # Authority name mapping for query extraction
 AUTHORITY_NAMES = {
@@ -28,6 +37,38 @@ AUTHORITY_NAMES = {
     'cdsco': 'CDSCO',
     'nmpa': 'NMPA'
 }
+
+TRUSTED_AUTHORITY_DOMAINS = {
+    "FDA": ["fda.gov"],
+    "EMA": ["ema.europa.eu"],
+    "ICH": ["ich.org"],
+}
+
+DEFAULT_TRUSTED_DOMAINS = ["fda.gov", "ema.europa.eu", "ich.org"]
+
+AUTHORITY_FALLBACK_PAGES = {
+    "FDA": [
+        "https://www.fda.gov/drugs/biosimilars",
+        "https://www.fda.gov/vaccines-blood-biologics/biosimilars",
+    ],
+    "EMA": [
+        "https://www.ema.europa.eu/en/human-regulatory-overview/marketing-authorisation/biosimilar-medicines-overview",
+        "https://www.ema.europa.eu/en/human-regulatory-overview/research-development/scientific-guidelines",
+    ],
+    "ICH": [
+        "https://www.ich.org/page/quality-guidelines",
+        "https://www.ich.org/page/safety-guidelines",
+    ],
+}
+
+IGNORED_PARAGRAPH_MARKERS = [
+    "we're sorry",
+    "page you are looking for",
+    "javascript is disabled",
+    "skip to main content",
+    "cookie",
+    "privacy policy",
+]
 
 LATEST_QUERY_TERMS = {
     "latest", "recent", "new", "update", "updates", "current", "newest"
@@ -83,6 +124,182 @@ def understand_query(query: str) -> tuple[str, str | None]:
     mode = "latest" if any(term in query_lower for term in LATEST_QUERY_TERMS) else "standard"
     print(f"[QUERY UNDERSTANDING] mode={mode} | authority={requested_authority or 'None'}")
     return mode, requested_authority
+
+
+def _get_trusted_domains(authority: str | None) -> list[str]:
+    if authority and authority.upper() in TRUSTED_AUTHORITY_DOMAINS:
+        return TRUSTED_AUTHORITY_DOMAINS[authority.upper()]
+    return DEFAULT_TRUSTED_DOMAINS
+
+
+def _is_trusted_domain(url: str, trusted_domains: list[str]) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+        return any(host == domain or host.endswith(f".{domain}") for domain in trusted_domains)
+    except Exception:
+        return False
+
+
+def _normalize_duckduckgo_link(raw_link: str) -> str:
+    if not raw_link:
+        return ""
+    if raw_link.startswith("http"):
+        parsed = urlparse(raw_link)
+        if "duckduckgo.com" in (parsed.hostname or ""):
+            uddg = parse_qs(parsed.query).get("uddg")
+            if uddg:
+                return unquote(uddg[0])
+        return raw_link
+    if raw_link.startswith("/l/?"):
+        parsed = urlparse(raw_link)
+        uddg = parse_qs(parsed.query).get("uddg")
+        if uddg:
+            return unquote(uddg[0])
+    return ""
+
+
+def _build_search_query(query: str, authority: str | None, trusted_domains: list[str]) -> str:
+    authority_part = authority if authority else "regulatory"
+    domain_part = " OR ".join([f"site:{domain}" for domain in trusted_domains])
+    return f"{authority_part} {query} latest guidance {domain_part}"
+
+
+async def fetch_web_context(query: str, authority: str | None = None) -> str:
+    """
+    Fetch additional context from trusted authority websites when RAG context is weak.
+    Uses DuckDuckGo HTML search and extracts meaningful paragraphs from top pages.
+    """
+    trusted_domains = _get_trusted_domains(authority)
+    search_query = _build_search_query(query, authority, trusted_domains)
+    start = time.monotonic()
+    snippets: list[str] = []
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; RegIntelBot/1.0)"},
+            timeout=1.5,
+        ) as client:
+            # Step 1: Search for trusted pages
+            remaining = MAX_WEB_FETCH_SECONDS - (time.monotonic() - start)
+            if remaining <= 0:
+                return ""
+
+            search_resp = await client.get(
+                "https://duckduckgo.com/html/",
+                params={"q": search_query},
+                timeout=min(1.5, max(0.5, remaining)),
+            )
+            soup = BeautifulSoup(search_resp.text, "html.parser")
+
+            raw_links = []
+            for a in soup.select("a.result__a"):
+                href = (a.get("href") or "").strip()
+                url = _normalize_duckduckgo_link(href)
+                if url and _is_trusted_domain(url, trusted_domains):
+                    raw_links.append(url)
+
+            seen = set()
+            target_urls = []
+            for url in raw_links:
+                if url not in seen:
+                    seen.add(url)
+                    target_urls.append(url)
+                if len(target_urls) >= MAX_WEB_PAGES:
+                    break
+
+            if not target_urls and authority and authority.upper() in AUTHORITY_FALLBACK_PAGES:
+                target_urls = AUTHORITY_FALLBACK_PAGES[authority.upper()][:MAX_WEB_PAGES]
+
+            # Step 2: Fetch page content and extract meaningful paragraphs
+            for url in target_urls:
+                remaining = MAX_WEB_FETCH_SECONDS - (time.monotonic() - start)
+                if remaining <= 0:
+                    break
+
+                try:
+                    resp = await client.get(url, timeout=min(1.5, max(0.5, remaining)))
+                    page = BeautifulSoup(resp.text, "html.parser")
+                    for tag in page(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
+                        tag.decompose()
+
+                    paragraphs = []
+                    for p in page.find_all("p"):
+                        text = " ".join((p.get_text(" ", strip=True) or "").split())
+                        low = text.lower()
+                        if len(text) >= 80 and not any(marker in low for marker in IGNORED_PARAGRAPH_MARKERS):
+                            paragraphs.append(text)
+                        if len(paragraphs) >= 6:
+                            break
+
+                    if paragraphs:
+                        snippet = f"Source: {url}\n" + "\n".join(paragraphs)
+                        snippets.append(snippet)
+
+                    if sum(len(s) for s in snippets) >= WEB_CONTEXT_CHAR_LIMIT:
+                        break
+                except Exception as page_error:
+                    print(f"[WEB CONTEXT] Page fetch failed for {url}: {page_error}")
+
+            # Fallback if search-based URLs produced no useful snippets
+            if not snippets and authority and authority.upper() in AUTHORITY_FALLBACK_PAGES:
+                for url in AUTHORITY_FALLBACK_PAGES[authority.upper()][:MAX_WEB_PAGES]:
+                    remaining = MAX_WEB_FETCH_SECONDS - (time.monotonic() - start)
+                    if remaining <= 0:
+                        break
+                    try:
+                        resp = await client.get(url, timeout=min(1.5, max(0.5, remaining)))
+                        page = BeautifulSoup(resp.text, "html.parser")
+                        for tag in page(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
+                            tag.decompose()
+
+                        paragraphs = []
+                        for p in page.find_all("p"):
+                            text = " ".join((p.get_text(" ", strip=True) or "").split())
+                            low = text.lower()
+                            if len(text) >= 80 and not any(marker in low for marker in IGNORED_PARAGRAPH_MARKERS):
+                                paragraphs.append(text)
+                            if len(paragraphs) >= 6:
+                                break
+
+                        if paragraphs:
+                            snippet = f"Source: {url}\n" + "\n".join(paragraphs)
+                            snippets.append(snippet)
+                    except Exception as fallback_page_error:
+                        print(f"[WEB CONTEXT] Fallback page fetch failed for {url}: {fallback_page_error}")
+
+    except Exception as e:
+        print(f"[WEB CONTEXT] Search failed: {e}")
+        return ""
+
+    combined = "\n\n".join(snippets).strip()
+    return combined[:WEB_CONTEXT_CHAR_LIMIT]
+
+
+def _is_weak_context(query: str, rag_context: str) -> bool:
+    """
+    Weak context detector:
+    1) Empty/short context
+    2) Very low lexical overlap between query and context
+    """
+    if not rag_context or len(rag_context.strip()) < 100:
+        return True
+
+    query_tokens = set(re.findall(r"[a-zA-Z]{4,}", query.lower()))
+    context_tokens = set(re.findall(r"[a-zA-Z]{4,}", rag_context.lower()))
+
+    stop_words = {
+        "what", "which", "when", "where", "about", "latest", "recent", "guidance", "guidelines",
+        "regulatory", "update", "updates", "current", "from", "with", "that", "this", "does"
+    }
+    query_tokens = {t for t in query_tokens if t not in stop_words}
+
+    if not query_tokens:
+        return False
+
+    overlap = query_tokens.intersection(context_tokens)
+    # If almost none of the meaningful query terms appear in context, treat as weak.
+    return len(overlap) < 2
 
 def classify_query_type(query: str) -> tuple[str, str]:
     """
@@ -246,11 +463,29 @@ Content: {update.short_summary or update.full_text[:300]}"""
         
         structured_context = "\n\n".join(context_parts)
     
-    # STEP 6: Generate response with mode awareness
+    # STEP 6: Build final context with optional web augmentation when RAG context is weak
     detected_authority_from_rag = retrieval_metrics.get("detected_authority")
+    rag_context = structured_context
+    web_context = ""
+
+    if _is_weak_context(request.query, rag_context):
+        try:
+            web_context = asyncio.run(fetch_web_context(request.query, requested_authority or detected_authority_from_rag))
+        except Exception as web_error:
+            print(f"[WEB CONTEXT] Async fetch failed: {web_error}")
+            web_context = ""
+
+    final_context = rag_context
+    if web_context:
+        final_context = f"{rag_context}\n\nWeb Data:\n{web_context}" if rag_context else f"Web Data:\n{web_context}"
+
+    print("RAG context length:", len(rag_context))
+    print("Web context used:", bool(web_context))
+
+    # STEP 7: Generate response with mode awareness
     answer = _generate_hybrid_response(
         query=request.query,
-        context=structured_context,
+        context=final_context,
         intent=intent,
         response_type=response_type,
         authority=requested_authority or detected_authority_from_rag,
@@ -418,13 +653,13 @@ def _generate_hybrid_response(query: str, context: str, intent: str, response_ty
     
     if mode == "GENERAL_GPT":
         # General knowledge response (no documents)
-        return _generate_general_response(query, intent, response_type, authority, query_mode, retrieval_metrics)
+        return _generate_general_response(query, context, intent, response_type, authority, query_mode, retrieval_metrics)
     else:
         # RAG response (with documents)
         return _generate_rag_response(query, context, intent, response_type, authority, sources, num_sources, query_mode, retrieval_metrics)
 
 
-def _generate_general_response(query: str, intent: str, response_type: str, authority: str = None,
+def _generate_general_response(query: str, context: str, intent: str, response_type: str, authority: str = None,
                                query_mode: str = "standard",
                                retrieval_metrics: dict = None) -> str:
     """
@@ -443,7 +678,7 @@ def _generate_general_response(query: str, intent: str, response_type: str, auth
     # Use AI service to generate response with Groq
     answer = ai_service.generate_smart_answer(
         query=query,
-        context="",  # No context for general knowledge
+        context=context,
         intent=intent,
         detected_authority=authority,
         query_mode=query_mode,
