@@ -4,7 +4,7 @@ const baseURL = process.env.NEXT_PUBLIC_API_URL;
 console.log("API BASE URL:", baseURL);
 
 if (!baseURL) {
-  throw new Error("NEXT_PUBLIC_API_URL is not set. API requests cannot be routed.");
+  console.warn("NEXT_PUBLIC_API_URL is missing");
 }
 
 const api = axios.create({

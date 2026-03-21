@@ -7,6 +7,8 @@ COPY package*.json ./
 
 RUN npm install
 
+ENV NEXT_PUBLIC_API_URL=https://web-production-44fa3.up.railway.app/api/v1
+
 COPY . .
 
 # Build Next.js application
