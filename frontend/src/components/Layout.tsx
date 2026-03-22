@@ -9,6 +9,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<any>(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  useEffect(() => {
+    // Keep desktop default open; start mobile closed for better first paint UX.
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setIsSidebarOpen(false);
+    }
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -40,9 +48,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   ];
 
   return (
-    <div className="flex h-screen bg-aurora text-foreground overflow-hidden">
+    <div className="h-screen bg-aurora text-foreground overflow-hidden relative">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <button
+          aria-label="Close sidebar overlay"
+          onClick={() => setIsSidebarOpen(false)}
+          className="lg:hidden fixed inset-0 bg-black/40 z-30 transition-opacity duration-300"
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gradient-to-b from-[#0b152b] to-[#0a0f1a] border-r border-white/10 overflow-y-auto flex flex-col">
+      <aside
+        className={`fixed top-0 left-0 z-40 h-full w-64 bg-gradient-to-b from-[#0b152b] to-[#0a0f1a] border-r border-white/10 overflow-y-auto flex flex-col transform transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="p-6 sticky top-0 bg-gradient-to-b from-[#0b152b] to-[#0a0f1a] border-b border-white/10">
           <div className="font-[var(--font-display)] text-2xl font-bold bg-gradient-to-r from-[#00d9ff] to-[#7f5af0] bg-clip-text text-transparent">
             RegIntel
@@ -82,11 +103,24 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div
+        className={`h-full flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${
+          isSidebarOpen ? "lg:ml-64" : "ml-0"
+        }`}
+      >
         {/* Header */}
         <header className="border-b border-white/10 bg-[rgba(11,21,43,0.4)] backdrop-blur">
           <div className="px-8 py-4 flex justify-between items-center">
-            <h2 className="font-semibold text-xl">Regulatory Intelligence Platform</h2>
+            <div className="flex items-center gap-3">
+              <button
+                aria-label="Toggle sidebar"
+                onClick={() => setIsSidebarOpen((prev) => !prev)}
+                className="h-10 w-10 rounded-lg border border-white/20 bg-white/10 hover:bg-white/20 transition flex items-center justify-center text-lg font-bold"
+              >
+                ☰
+              </button>
+              <h2 className="font-semibold text-xl">Regulatory Intelligence Platform</h2>
+            </div>
             <div className="flex items-center gap-4">
               <span className="text-xs px-3 py-1.5 bg-green-500/20 text-green-300 rounded-full font-medium animate-pulse">
                 ● System Ready
