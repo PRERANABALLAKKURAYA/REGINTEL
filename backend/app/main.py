@@ -17,10 +17,22 @@ app = FastAPI(title="Pharma Regulatory Intelligence API")
 allowed_origins = [
     "http://localhost:9090",
     "http://127.0.0.1:9090",
+    "https://frontend-production-a2ce3.up.railway.app",
+    "https://regintel.up.railway.app",
 ]
+
+# Optional single-origin override
 frontend_origin = os.getenv("FRONTEND_ORIGIN")
 if frontend_origin:
     allowed_origins.append(frontend_origin)
+
+# Optional multi-origin config (comma-separated)
+frontend_origins = os.getenv("FRONTEND_ORIGINS")
+if frontend_origins:
+    allowed_origins.extend([origin.strip() for origin in frontend_origins.split(",") if origin.strip()])
+
+# Keep order stable while removing duplicates
+allowed_origins = list(dict.fromkeys(allowed_origins))
 
 app.add_middleware(
     CORSMiddleware,
