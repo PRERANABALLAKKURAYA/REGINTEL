@@ -173,7 +173,7 @@ Formatting Rules:
             
             normalized = self._normalize_response(answer)
 
-            if self._is_response_generic(normalized):
+            if self._is_response_generic(normalized, query=query, intent=intent, authority=detected_authority):
                 print("[AI SERVICE] Response rejected as generic, rebuilding with strict factual prompt")
                 strict_prompt = self._build_strict_factual_prompt(query, context_for_prompt, detected_authority)
                 strict_completion = self.client.chat.completions.create(
@@ -189,7 +189,7 @@ Formatting Rules:
                 )
                 normalized = self._normalize_response(strict_completion.choices[0].message.content)
 
-            if self._is_response_generic(normalized):
+            if self._is_response_generic(normalized, query=query, intent=intent, authority=detected_authority):
                 print("[AI SERVICE] Strict retry still generic, using deterministic domain-grounded fallback")
                 return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
 
@@ -222,7 +222,7 @@ Formatting Rules:
                 guidelines.append(ln.lstrip("- "))
 
         if not guidelines:
-            guidelines = ["ICH M4 Common Technical Document structure", "ICH Q1A(R2) Stability testing", "ICH Q2(R2) Analytical validation"]
+            guidelines = ["Topic-specific regulatory references based on query and authority context"]
 
         requirements = [
             "Map each guideline to dossier evidence expectations and validation strategy.",
@@ -241,11 +241,16 @@ Formatting Rules:
         authority_name = authority or "the requested authority"
         guidelines_hint = self._domain_guideline_pack(query, authority).get("guidelines", [])
         hint_text = ", ".join(guidelines_hint[:8]) if guidelines_hint else "Include concrete identifiers such as ICH M4, ICH Q1A(R2), ICH Q2(R2), 21 CFR references, 351(k) as applicable"
+        if "ctd" in (query or "").lower() or "common technical document" in (query or "").lower():
+            hint_text = "Include ICH M4 (CTD), Modules 1-5, and related ICH quality references such as Q1A(R2), Q2(R2), Q8(R2), Q9, Q10"
+        focus_terms = self._focus_terms(query)
+        focus_hint = ", ".join(focus_terms[:8]) if focus_terms else query
         return f"""You are a pharmaceutical regulatory expert.
 
 Query: {query}
 Authority: {authority_name}
 Context: {context}
+Focus terms that must be addressed directly: {focus_hint}
 
 Return only factual, specific regulatory content with concrete identifiers.
 Must include: {hint_text}
@@ -260,14 +265,47 @@ Sources:
 
 Never use generic consulting phrases or vague advice."""
 
-    def _is_response_generic(self, answer: str) -> bool:
+    def _requires_guideline_ids(self, query: str, intent: Optional[str]) -> bool:
+        q = (query or "").lower()
+        if intent in {"GUIDELINE_REQUEST", "REGULATION_REQUEST", "DOCUMENT_REQUEST", "DATABASE_QUERY"}:
+            return True
+        keywords = [
+            "guideline", "guidance", "ctd", "module", "ich", "cfr", "regulation",
+            "compliance", "biosimilar", "stability", "gmp", "gcp", "clinical",
+        ]
+        return any(k in q for k in keywords)
+
+    def _focus_terms(self, query: str) -> list[str]:
+        q = (query or "").lower()
+        terms = re.findall(r"[a-zA-Z]{3,}", q)
+        stop = {
+            "what", "which", "when", "where", "why", "how", "about", "latest", "recent",
+            "update", "updates", "tell", "explain", "show", "give", "please", "need",
+            "does", "into", "from", "with", "that", "this", "there", "their", "your",
+        }
+        return [t for t in terms if t not in stop][:12]
+
+    def _is_response_generic(self, answer: str, query: str = "", intent: Optional[str] = None, authority: Optional[str] = None) -> bool:
         text = (answer or "").lower()
         banned = ["ai unavailable", "no data found", "use latest guidance", "consult authorities", "consult official", "align to"]
         if any(b in text for b in banned):
             return True
 
-        guideline_id_pattern = r"\b((ich\s*[qems]\d+[a-z]?(?:\(r\d+\))?)|(m\d)|(q\d+[a-z]?(?:\(r\d+\))?)|(21\s*cfr\s*(part\s*)?\d+)|(351\(k\)))\b"
-        if not re.search(guideline_id_pattern, text, flags=re.IGNORECASE):
+        # Ensure response is topically aligned to query terms.
+        focus = self._focus_terms(query)
+        if focus:
+            overlap = sum(1 for t in focus if t in text)
+            if overlap == 0:
+                return True
+
+        # Only enforce explicit guideline-id presence when the query intent requires it.
+        if self._requires_guideline_ids(query, intent):
+            guideline_id_pattern = r"\b((ich\s*[qems]\d+[a-z]?(?:\(r\d+\))?)|(m\d)|(q\d+[a-z]?(?:\(r\d+\))?)|(21\s*cfr\s*(part\s*)?\d+)|(351\(k\))|(eu\s*\d{3,4}/\d{2,4}))\b"
+            if not re.search(guideline_id_pattern, text, flags=re.IGNORECASE):
+                return True
+
+        if authority and authority.lower() not in text and self._requires_guideline_ids(query, intent):
+            # For authority-specific regulatory asks, response should mention authority explicitly.
             return True
 
         required_sections = ["title:", "specific guidelines:", "key requirements:", "practical implementation:", "latest updates:", "sources:"]
@@ -277,7 +315,7 @@ Never use generic consulting phrases or vague advice."""
         q = (query or "").lower()
         auth = (authority or "").upper()
 
-        if ("ctd" in q or "module" in q) and ("ich" in q or auth == "ICH"):
+        if "ctd" in q or "common technical document" in q or (("module" in q) and ("ich" in q or auth == "ICH")):
             return {
                 "title": "ICH CTD guidance framework",
                 "guidelines": [
@@ -328,7 +366,7 @@ Never use generic consulting phrases or vague advice."""
 
         return {
             "title": "Regulatory guidance summary",
-            "guidelines": ["ICH Q1A(R2)", "ICH Q2(R2)", "ICH Q8(R2)"],
+            "guidelines": ["Authority-specific primary guideline for the requested topic", "Applicable submission pathway requirements", "Relevant quality/safety/efficacy framework for the query scope"],
             "requirements": ["Map quality, safety, efficacy requirements to authority-specific submission pathways."],
             "implementation": ["Maintain a traceable compliance matrix from guideline to dossier section."],
             "latest_updates": ["Prioritize the most recent authority publication date and effective scope."],
