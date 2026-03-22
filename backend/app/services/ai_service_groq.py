@@ -250,19 +250,10 @@ Response Format:
                 "- If there are multiple regions, align to the strictest requirement first to reduce rework."
             )
 
-        if query_mode == "latest" and authority:
-            return (
-                f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n"
-                f"For {authority}, focus on the most recent applicable guidance framework tied to your query, then map requirements to submission content, lifecycle controls, and post-approval obligations.\n\n"
-                "Practical implications:\n"
-                "- Confirm the governing pathway and legal basis first.\n"
-                "- Translate guidance into actionable dossier sections and evidence requirements.\n"
-                "- Prioritize implementation by compliance risk and submission timelines."
-            )
-
         if "biosimilar" in query_lower or "biosimilar" in query_lower:
+            prefix = f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n" if query_mode == "latest" and authority else ""
             return (
-                "Biosimilar expectations typically center on a totality-of-evidence approach.\n\n"
+                f"{prefix}Biosimilar expectations typically center on a totality-of-evidence approach.\n\n"
                 "Key insights:\n"
                 "- FDA pathway is under 351(k) with emphasis on analytical similarity, then targeted nonclinical/clinical residual uncertainty.\n"
                 "- EMA framework also uses stepwise comparability, often expecting robust quality comparability and tailored clinical confirmation where needed.\n"
@@ -288,6 +279,16 @@ Response Format:
                 "- EU/EMA environment: CTR 536/2014 operational requirements affect submissions and transparency workflows.\n"
                 "- Risk-based quality management is expected in modern GCP operations.\n\n"
                 "Practical interpretation: align protocol deviations, vendor oversight, and pharmacovigilance interfaces before first-patient-in to avoid inspection findings."
+            )
+
+        if query_mode == "latest" and authority:
+            return (
+                f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n"
+                f"For {authority}, focus on the most recent applicable guidance framework tied to your query, then map requirements to submission content, lifecycle controls, and post-approval obligations.\n\n"
+                "Practical implications:\n"
+                "- Confirm the governing pathway and legal basis first.\n"
+                "- Translate guidance into actionable dossier sections and evidence requirements.\n"
+                "- Prioritize implementation by compliance risk and submission timelines."
             )
 
         return (

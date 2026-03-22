@@ -668,13 +668,6 @@ def _generate_general_response(query: str, context: str, intent: str, response_t
     """
     print(f"[RESPONSE] Generating GENERAL response ({response_type})")
     
-    # If latest-mode requested but no updates found, use explicit fallback preface.
-    latest_no_data_prefix = None
-    if query_mode == "latest" and authority:
-        docs_injected = (retrieval_metrics or {}).get("documents_injected", 0)
-        if docs_injected == 0:
-            latest_no_data_prefix = f"No recent {authority}-specific updates found. Here is the most relevant current guidance:"
-
     # Use AI service to generate response with Groq
     answer = ai_service.generate_smart_answer(
         query=query,
@@ -684,9 +677,6 @@ def _generate_general_response(query: str, context: str, intent: str, response_t
         query_mode=query_mode,
         retrieval_metrics=retrieval_metrics
     )
-
-    if latest_no_data_prefix and not answer.lower().startswith(latest_no_data_prefix.lower()):
-        return f"{latest_no_data_prefix}\n\n{answer}"
 
     return answer
 
