@@ -62,14 +62,26 @@ Instructions:
 - If context is missing:
     - Use domain knowledge BUT stay specific to authority
 
-Response Format:
-- Start with a direct answer
-- Then provide:
-    - Key updates / guidelines
-    - Relevant regulation references (e.g., 351(k), FDA guidance docs)
-    - Practical implications
-- Avoid mentioning other authorities (EMA, ICH) unless asked
-- Avoid vague phrases like "consult official sources""" 
+Response Format (always):
+Title: <one-line answer title>
+Key Points:
+- <point 1>
+- <point 2>
+- <point 3>
+Latest Updates:
+1. <latest item or trend>
+2. <latest item or trend>
+Actionable Insights:
+- <action 1>
+- <action 2>
+Sources:
+- <source name or URL if available>
+
+Formatting Rules:
+- No markdown symbols such as **, ###, or fenced blocks
+- Keep sections readable with blank lines
+- If latest updates are unavailable, provide best current guidance in Latest Updates section
+- Never output generic failure statements such as AI unavailable or no data found""" 
 
     def generate_smart_answer(
         self,
@@ -152,7 +164,7 @@ Response Format:
             print(f"[AI SERVICE] Finish reason: {chat_completion.choices[0].finish_reason}")
             print(f"[AI SERVICE] Tokens used: {chat_completion.usage.total_tokens if chat_completion.usage else 'N/A'}")
             
-            return answer
+            return self._normalize_response(answer)
             
         except Exception as e:
             print(f"[AI SERVICE] Groq API error: {type(e).__name__}: {str(e)}")
@@ -160,6 +172,60 @@ Response Format:
             traceback.print_exc()
             print(f"[AI SERVICE] Falling back to static response")
             return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
+
+    def _normalize_response(self, answer: str) -> str:
+        """Normalize model output to clean UI-friendly structured format."""
+        cleaned = (answer or "").replace("**", "").replace("###", "").replace("##", "").strip()
+
+        # If required sections already exist, return cleaned content.
+        required = ["Title:", "Key Points:", "Latest Updates:", "Actionable Insights:", "Sources:"]
+        if all(section in cleaned for section in required):
+            return cleaned
+
+        lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+        title = lines[0] if lines else "Regulatory Guidance Summary"
+
+        key_points = []
+        for ln in lines[1:]:
+            if len(key_points) >= 4:
+                break
+            if ln and not ln.lower().startswith(("title:", "key points:", "latest updates:", "actionable insights:", "sources:")):
+                key_points.append(ln.lstrip("- "))
+
+        if not key_points:
+            key_points = ["Regulatory requirements should be interpreted in the context of authority-specific pathways."]
+
+        latest_updates = ["Recent authority-relevant guidance should be prioritized by publication date and scope."]
+        actionable = [
+            "Map guidance points to dossier sections, quality controls, and lifecycle obligations.",
+            "Create an implementation tracker with owners and deadlines for compliance execution.",
+        ]
+        sources = ["Regulatory context and retrieved authority data"]
+
+        return self._build_structured_response(title, key_points, latest_updates, actionable, sources)
+
+    def _build_structured_response(
+        self,
+        title: str,
+        key_points: list[str],
+        latest_updates: list[str],
+        actionable: list[str],
+        sources: list[str],
+    ) -> str:
+        def _list(items: list[str], bullet: str = "-") -> str:
+            if not items:
+                return f"{bullet} Not available"
+            return "\n".join([f"{bullet} {item}" for item in items])
+
+        numbered_updates = "\n".join([f"{i + 1}. {item}" for i, item in enumerate(latest_updates or ["Best current guidance has been provided based on available evidence."])])
+
+        return (
+            f"Title: {title}\n\n"
+            f"Key Points:\n{_list(key_points)}\n\n"
+            f"Latest Updates:\n{numbered_updates}\n\n"
+            f"Actionable Insights:\n{_list(actionable)}\n\n"
+            f"Sources:\n{_list(sources)}"
+        )
 
     def _build_rag_prompt(
         self,
@@ -219,11 +285,8 @@ Response Format:
         authority: Optional[str] = None,
         query_mode: str = "standard"
     ) -> str:
-        """
-        Generate practical fallback response when Groq API is unavailable.
-        Keep responses useful and non-generic even without live LLM generation.
-        """
-        print("[AI SERVICE] Generating fallback practical response")
+        """Generate deterministic structured answer when LLM call cannot be completed."""
+        print("[AI SERVICE] Generating deterministic structured fallback response")
 
         query_lower = query.lower()
         authority_name = authority if authority else "relevant authority"
@@ -231,35 +294,49 @@ Response Format:
         if context.strip():
             lines = [line.strip() for line in context.splitlines() if line.strip()]
             condensed = []
+            source_urls = []
             for line in lines:
                 if line.startswith("Title:") or line.startswith("Authority:") or line.startswith("Date:") or line.startswith("Category:"):
                     condensed.append(line)
+                if line.startswith("Source:"):
+                    source_urls.append(line.replace("Source:", "").strip())
                 if len(condensed) >= 8:
                     break
 
-            context_preview = "\n".join(condensed) if condensed else "Document context is available but could not be condensed."
-            return (
-                "AI model is temporarily unavailable, so this answer is based on retrieved regulatory context only.\n\n"
-                f"Query focus: {query}\n"
-                f"Authority focus: {authority_name}\n\n"
-                "Most relevant context found:\n"
-                f"{context_preview}\n\n"
-                "Practical interpretation:\n"
-                "- Use the latest item dates to prioritize implementation order.\n"
-                "- Map each document title to affected SOPs, labeling, submission modules, or vigilance workflows.\n"
-                "- If there are multiple regions, align to the strictest requirement first to reduce rework."
+            key_points = condensed if condensed else ["Relevant authority context was retrieved and considered."]
+            latest_updates = ["Prioritize the most recent dated items in the retrieved context."]
+            actionable = [
+                "Translate key guidance into submission and lifecycle control actions.",
+                "Assign owners and timelines for implementation readiness.",
+            ]
+            sources = source_urls if source_urls else [f"Retrieved context for {authority_name}"]
+            return self._build_structured_response(
+                title=f"{authority_name} regulatory guidance overview",
+                key_points=key_points[:5],
+                latest_updates=latest_updates,
+                actionable=actionable,
+                sources=sources,
             )
 
         if "biosimilar" in query_lower or "biosimilar" in query_lower:
             prefix = f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n" if query_mode == "latest" and authority else ""
-            return (
-                f"{prefix}Biosimilar expectations typically center on a totality-of-evidence approach.\n\n"
-                "Key insights:\n"
-                "- FDA pathway is under 351(k) with emphasis on analytical similarity, then targeted nonclinical/clinical residual uncertainty.\n"
-                "- EMA framework also uses stepwise comparability, often expecting robust quality comparability and tailored clinical confirmation where needed.\n"
-                "- ICH Q5E comparability principles are practically useful when evaluating manufacturing or post-change similarity logic.\n\n"
-                "Practical interpretation: build development plans around analytical similarity first, then justify any reduced clinical package with a strong residual-uncertainty narrative."
-            )
+            key_points = [
+                "Biosimilar assessment follows a totality-of-evidence approach with analytical similarity as the foundation.",
+                "FDA 351(k) pathway emphasizes residual uncertainty reduction through targeted nonclinical and clinical evidence.",
+                "Comparability principles such as ICH Q5E are practical for post-change similarity logic.",
+            ]
+            latest_updates = [
+                f"{authority_name} latest biosimilar guidance should be prioritized by publication year and scope.",
+            ]
+            actionable = [
+                "Build the development plan around analytical comparability first.",
+                "Justify any reduced clinical package with explicit residual uncertainty rationale.",
+            ]
+            sources = [f"{authority_name} biosimilar guidance framework"]
+            title = "Biosimilar guidance summary"
+            if prefix:
+                latest_updates.insert(0, prefix.strip())
+            return self._build_structured_response(title, key_points, latest_updates, actionable, sources)
 
         if "stability" in query_lower or "zone iv" in query_lower:
             return (
@@ -291,13 +368,19 @@ Response Format:
                 "- Prioritize implementation by compliance risk and submission timelines."
             )
 
-        return (
-            f"Your query is about {query}.\n\n"
-            "Without live model generation, here is a direct regulatory interpretation:\n"
-            "- Identify the governing framework first (for example ICH quality/safety/efficacy guidance, FDA 21 CFR, EMA/CTR, or CDSCO schedules).\n"
-            "- Determine the submission-impacting elements: data package, CMC controls, labeling, timelines, and post-approval obligations.\n"
-            "- Compare region-specific differences only where they change dossier design or operational execution.\n\n"
-            "Practical interpretation: convert the question into a compliance action list with owners, due dates, and evidence artifacts for audit readiness."
+        return self._build_structured_response(
+            title="Regulatory guidance summary",
+            key_points=[
+                f"Query scope: {query}",
+                "Identify governing regulations and authority-specific implementation requirements.",
+                "Prioritize obligations that affect submission content, CMC controls, labeling, and post-approval commitments.",
+            ],
+            latest_updates=["Use the most recently available authority guidance and policy updates relevant to this topic."],
+            actionable=[
+                "Convert guidance requirements into a compliance action plan with owners and timelines.",
+                "Prepare evidence artifacts for audit and submission readiness.",
+            ],
+            sources=[f"{authority_name} regulatory framework"],
         )
 
     def analyze_update(

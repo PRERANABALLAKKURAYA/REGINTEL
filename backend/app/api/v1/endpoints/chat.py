@@ -301,6 +301,53 @@ def _is_weak_context(query: str, rag_context: str) -> bool:
     # If almost none of the meaningful query terms appear in context, treat as weak.
     return len(overlap) < 2
 
+
+def _needs_web_after_llm(answer: str, query_mode: str) -> bool:
+    """
+    Detect under-grounded answers and force web augmentation retry.
+    """
+    if query_mode == "latest":
+        return True
+
+    answer_lower = (answer or "").lower()
+    weak_markers = [
+        "not mentioned in the provided documents",
+        "general information",
+        "high-confidence document context was retrieved",
+        "best current guidance",
+        "could not be condensed",
+    ]
+    return any(marker in answer_lower for marker in weak_markers)
+
+
+def _extract_web_sources(web_context: str, authority: str | None) -> list[dict]:
+    """Convert embedded `Source:` lines from web context into API source objects."""
+    if not web_context:
+        return []
+
+    sources = []
+    seen = set()
+    for line in web_context.splitlines():
+        line = line.strip()
+        if not line.startswith("Source:"):
+            continue
+        url = line.replace("Source:", "", 1).strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        host = (urlparse(url).hostname or "source").replace("www.", "")
+        sources.append(
+            {
+                "id": -1000 - len(sources),
+                "title": f"Web update from {host}",
+                "source_link": url,
+                "published_date": datetime.utcnow().isoformat(),
+                "authority": authority,
+                "category": "Web Update",
+            }
+        )
+    return sources
+
 def classify_query_type(query: str) -> tuple[str, str]:
     """
     HYBRID INTELLIGENCE: Classify query intent and response type
@@ -495,8 +542,31 @@ Content: {update.short_summary or update.full_text[:300]}"""
         query_mode=query_mode,
         retrieval_metrics=retrieval_metrics
     )
+
+    # STEP 8: If answer still looks weak and web context was not yet used, fetch web context and retry once.
+    if not web_context and _needs_web_after_llm(answer, query_mode):
+        try:
+            web_context_retry = asyncio.run(fetch_web_context(request.query, requested_authority or detected_authority_from_rag))
+            if web_context_retry:
+                web_context = web_context_retry
+                final_context = f"{rag_context}\n\nWeb Data:\n{web_context}" if rag_context else f"Web Data:\n{web_context}"
+                print("[PIPELINE] Retrying with web grounding context")
+                answer = _generate_hybrid_response(
+                    query=request.query,
+                    context=final_context,
+                    intent=intent,
+                    response_type=response_type,
+                    authority=requested_authority or detected_authority_from_rag,
+                    sources=source_links,
+                    mode=retrieval_mode,
+                    num_sources=len(relevant_updates),
+                    query_mode=query_mode,
+                    retrieval_metrics=retrieval_metrics
+                )
+        except Exception as web_retry_error:
+            print(f"[WEB CONTEXT] Retry fetch failed: {web_retry_error}")
     
-    # STEP 7: Prepare final response
+    # STEP 9: Prepare final response
     sources = [
         {
             "id": update.id,
@@ -508,6 +578,9 @@ Content: {update.short_summary or update.full_text[:300]}"""
         }
         for update in relevant_updates
     ]
+
+    # Merge web sources into response source list
+    sources.extend(_extract_web_sources(web_context, requested_authority or detected_authority_from_rag))
     
     # Extract PDF info from sources and generate PDFs if needed
     pdfs = []
