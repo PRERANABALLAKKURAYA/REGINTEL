@@ -685,7 +685,7 @@ def _generate_general_response(query: str, context: str, intent: str, response_t
         retrieval_metrics=retrieval_metrics
     )
 
-    if latest_no_data_prefix:
+    if latest_no_data_prefix and not answer.lower().startswith(latest_no_data_prefix.lower()):
         return f"{latest_no_data_prefix}\n\n{answer}"
 
     return answer
