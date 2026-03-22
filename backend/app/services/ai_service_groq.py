@@ -3,6 +3,7 @@ AI Service using Groq API with Llama 3 Model
 Handles RAG responses and general LLM queries with improved logging
 """
 import os
+import re
 from pathlib import Path
 from groq import Groq
 from dotenv import load_dotenv
@@ -42,7 +43,7 @@ class AIService:
                 self.client = None
         
         # System prompt template (formatted per request with query + context)
-        self.system_prompt_template = """You are a Regulatory Intelligence Assistant.
+        self.system_prompt_template = """You are a pharmaceutical regulatory expert.
 
 User Query: {query}
 Context: {context}
@@ -55,25 +56,31 @@ Instructions:
 - If query includes "latest" or "recent":
     - Prioritize recent regulatory updates, guidelines, or policy changes
     - Mention years or document names if possible
-- DO NOT give general textbook explanations unless no data exists
+- DO NOT give generic textbook explanations
 - If context is available:
     - Use it FIRST
     - Extract specific facts
 - If context is missing:
-    - Use domain knowledge BUT stay specific to authority
+    - Use domain knowledge BUT stay specific to authority and cite concrete guidelines
+
+Mandatory rule:
+- Always give specific guidelines, frameworks, and real-world regulatory details. Avoid generic consulting language.
 
 Response Format (always):
 Title: <one-line answer title>
-Key Points:
+Specific Guidelines:
 - <point 1>
 - <point 2>
 - <point 3>
+Key Requirements:
+- <requirement 1>
+- <requirement 2>
+Practical Implementation:
+- <action 1>
+- <action 2>
 Latest Updates:
 1. <latest item or trend>
 2. <latest item or trend>
-Actionable Insights:
-- <action 1>
-- <action 2>
 Sources:
 - <source name or URL if available>
 
@@ -81,7 +88,7 @@ Formatting Rules:
 - No markdown symbols such as **, ###, or fenced blocks
 - Keep sections readable with blank lines
 - If latest updates are unavailable, provide best current guidance in Latest Updates section
-- Never output generic failure statements such as AI unavailable or no data found""" 
+- Never output phrases like: AI unavailable, No data found, Use latest guidance, Consult authorities""" 
 
     def generate_smart_answer(
         self,
@@ -164,7 +171,29 @@ Formatting Rules:
             print(f"[AI SERVICE] Finish reason: {chat_completion.choices[0].finish_reason}")
             print(f"[AI SERVICE] Tokens used: {chat_completion.usage.total_tokens if chat_completion.usage else 'N/A'}")
             
-            return self._normalize_response(answer)
+            normalized = self._normalize_response(answer)
+
+            if self._is_response_generic(normalized):
+                print("[AI SERVICE] Response rejected as generic, rebuilding with strict factual prompt")
+                strict_prompt = self._build_strict_factual_prompt(query, context_for_prompt, detected_authority)
+                strict_completion = self.client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": strict_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.2,
+                    max_tokens=900,
+                    top_p=1,
+                    stream=False
+                )
+                normalized = self._normalize_response(strict_completion.choices[0].message.content)
+
+            if self._is_response_generic(normalized):
+                print("[AI SERVICE] Strict retry still generic, using deterministic domain-grounded fallback")
+                return self._generate_fallback_answer(query, context, intent, detected_authority, query_mode)
+
+            return normalized
             
         except Exception as e:
             print(f"[AI SERVICE] Groq API error: {type(e).__name__}: {str(e)}")
@@ -178,38 +207,141 @@ Formatting Rules:
         cleaned = (answer or "").replace("**", "").replace("###", "").replace("##", "").strip()
 
         # If required sections already exist, return cleaned content.
-        required = ["Title:", "Key Points:", "Latest Updates:", "Actionable Insights:", "Sources:"]
+        required = ["Title:", "Specific Guidelines:", "Key Requirements:", "Practical Implementation:", "Latest Updates:", "Sources:"]
         if all(section in cleaned for section in required):
             return cleaned
 
         lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
         title = lines[0] if lines else "Regulatory Guidance Summary"
 
-        key_points = []
+        guidelines = []
         for ln in lines[1:]:
-            if len(key_points) >= 4:
+            if len(guidelines) >= 5:
                 break
             if ln and not ln.lower().startswith(("title:", "key points:", "latest updates:", "actionable insights:", "sources:")):
-                key_points.append(ln.lstrip("- "))
+                guidelines.append(ln.lstrip("- "))
 
-        if not key_points:
-            key_points = ["Regulatory requirements should be interpreted in the context of authority-specific pathways."]
+        if not guidelines:
+            guidelines = ["ICH M4 Common Technical Document structure", "ICH Q1A(R2) Stability testing", "ICH Q2(R2) Analytical validation"]
 
-        latest_updates = ["Recent authority-relevant guidance should be prioritized by publication date and scope."]
-        actionable = [
-            "Map guidance points to dossier sections, quality controls, and lifecycle obligations.",
-            "Create an implementation tracker with owners and deadlines for compliance execution.",
+        requirements = [
+            "Map each guideline to dossier evidence expectations and validation strategy.",
+            "Ensure submission modules include quality, safety, and efficacy evidence in required format.",
         ]
+        implementation = [
+            "Build a compliance matrix linking each guideline identifier to SOPs and submission sections.",
+            "Run readiness checks before submission to close evidence and formatting gaps.",
+        ]
+        latest_updates = ["Use the latest authority updates by publication date and effective scope."]
         sources = ["Regulatory context and retrieved authority data"]
 
-        return self._build_structured_response(title, key_points, latest_updates, actionable, sources)
+        return self._build_structured_response(title, guidelines, requirements, implementation, latest_updates, sources)
+
+    def _build_strict_factual_prompt(self, query: str, context: str, authority: Optional[str]) -> str:
+        authority_name = authority or "the requested authority"
+        guidelines_hint = self._domain_guideline_pack(query, authority).get("guidelines", [])
+        hint_text = ", ".join(guidelines_hint[:8]) if guidelines_hint else "Include concrete identifiers such as ICH M4, ICH Q1A(R2), ICH Q2(R2), 21 CFR references, 351(k) as applicable"
+        return f"""You are a pharmaceutical regulatory expert.
+
+Query: {query}
+Authority: {authority_name}
+Context: {context}
+
+Return only factual, specific regulatory content with concrete identifiers.
+Must include: {hint_text}
+
+Output sections exactly:
+Title:
+Specific Guidelines:
+Key Requirements:
+Practical Implementation:
+Latest Updates:
+Sources:
+
+Never use generic consulting phrases or vague advice."""
+
+    def _is_response_generic(self, answer: str) -> bool:
+        text = (answer or "").lower()
+        banned = ["ai unavailable", "no data found", "use latest guidance", "consult authorities", "consult official", "align to"]
+        if any(b in text for b in banned):
+            return True
+
+        guideline_id_pattern = r"\b((ich\s*[qems]\d+[a-z]?(?:\(r\d+\))?)|(m\d)|(q\d+[a-z]?(?:\(r\d+\))?)|(21\s*cfr\s*(part\s*)?\d+)|(351\(k\)))\b"
+        if not re.search(guideline_id_pattern, text, flags=re.IGNORECASE):
+            return True
+
+        required_sections = ["title:", "specific guidelines:", "key requirements:", "practical implementation:", "latest updates:", "sources:"]
+        return not all(section in text for section in required_sections)
+
+    def _domain_guideline_pack(self, query: str, authority: Optional[str]) -> Dict[str, Any]:
+        q = (query or "").lower()
+        auth = (authority or "").upper()
+
+        if ("ctd" in q or "module" in q) and ("ich" in q or auth == "ICH"):
+            return {
+                "title": "ICH CTD guidance framework",
+                "guidelines": [
+                    "ICH M4 Common Technical Document (CTD)",
+                    "Module 1 Regional Administrative Information",
+                    "Module 2 CTD Summaries",
+                    "Module 3 Quality",
+                    "Module 4 Nonclinical Study Reports",
+                    "Module 5 Clinical Study Reports",
+                    "ICH Q1A(R2) Stability Testing",
+                    "ICH Q2(R2) Analytical Validation",
+                    "ICH Q8(R2) Pharmaceutical Development",
+                    "ICH Q9 Quality Risk Management",
+                    "ICH Q10 Pharmaceutical Quality System",
+                ],
+                "requirements": [
+                    "Organize dossier content strictly by CTD module structure.",
+                    "Provide validated analytical methods and stability packages aligned to Q1A/Q2.",
+                    "Demonstrate development rationale and control strategy aligned to Q8/Q9/Q10.",
+                ],
+                "implementation": [
+                    "Create a module-by-module checklist for submission readiness.",
+                    "Link each quality claim to supporting method validation and stability evidence.",
+                ],
+                "latest_updates": ["Track ICH assembly and working group updates for M4 and Q-series revisions."],
+                "sources": ["https://www.ich.org/page/multidisciplinary-guidelines", "https://www.ich.org/page/quality-guidelines"],
+            }
+
+        if auth == "FDA" or "fda" in q:
+            return {
+                "title": "FDA regulatory guidance summary",
+                "guidelines": ["21 CFR Part 312", "21 CFR Part 314", "351(k) biosimilar pathway"],
+                "requirements": ["Map clinical, CMC, and labeling evidence to relevant CFR and guidance expectations."],
+                "implementation": ["Use pre-submission meetings to de-risk major evidence gaps."],
+                "latest_updates": ["Prioritize newly published FDA guidance documents for your product class."],
+                "sources": ["https://www.fda.gov"],
+            }
+
+        if auth == "EMA" or "ema" in q:
+            return {
+                "title": "EMA regulatory guidance summary",
+                "guidelines": ["EU CTD format", "EMA scientific guidelines", "CTR (EU) 536/2014 where applicable"],
+                "requirements": ["Align dossier strategy with EMA scientific advice and applicable CHMP guidance."],
+                "implementation": ["Plan evidence package to meet centralized procedure expectations."],
+                "latest_updates": ["Track EMA guideline revisions and committee highlights relevant to product type."],
+                "sources": ["https://www.ema.europa.eu"],
+            }
+
+        return {
+            "title": "Regulatory guidance summary",
+            "guidelines": ["ICH Q1A(R2)", "ICH Q2(R2)", "ICH Q8(R2)"],
+            "requirements": ["Map quality, safety, efficacy requirements to authority-specific submission pathways."],
+            "implementation": ["Maintain a traceable compliance matrix from guideline to dossier section."],
+            "latest_updates": ["Prioritize the most recent authority publication date and effective scope."],
+            "sources": ["Regulatory authority publications"],
+        }
 
     def _build_structured_response(
         self,
         title: str,
-        key_points: list[str],
+        guidelines: list[str],
+        requirements: list[str],
+        implementation: list[str],
         latest_updates: list[str],
-        actionable: list[str],
         sources: list[str],
     ) -> str:
         def _list(items: list[str], bullet: str = "-") -> str:
@@ -221,9 +353,10 @@ Formatting Rules:
 
         return (
             f"Title: {title}\n\n"
-            f"Key Points:\n{_list(key_points)}\n\n"
+            f"Specific Guidelines:\n{_list(guidelines)}\n\n"
+            f"Key Requirements:\n{_list(requirements)}\n\n"
+            f"Practical Implementation:\n{_list(implementation)}\n\n"
             f"Latest Updates:\n{numbered_updates}\n\n"
-            f"Actionable Insights:\n{_list(actionable)}\n\n"
             f"Sources:\n{_list(sources)}"
         )
 
@@ -303,24 +436,33 @@ Formatting Rules:
                 if len(condensed) >= 8:
                     break
 
-            key_points = condensed if condensed else ["Relevant authority context was retrieved and considered."]
-            latest_updates = ["Prioritize the most recent dated items in the retrieved context."]
+            pack = self._domain_guideline_pack(query, authority)
+            guidelines = pack.get("guidelines", [])
+            requirements = pack.get("requirements", [])
+            implementation = pack.get("implementation", [])
+            latest_updates = pack.get("latest_updates", [])
+
+            if condensed:
+                requirements = condensed[:4] + requirements
+
             actionable = [
                 "Translate key guidance into submission and lifecycle control actions.",
                 "Assign owners and timelines for implementation readiness.",
             ]
+            implementation = implementation + actionable
             sources = source_urls if source_urls else [f"Retrieved context for {authority_name}"]
             return self._build_structured_response(
-                title=f"{authority_name} regulatory guidance overview",
-                key_points=key_points[:5],
+                title=pack.get("title", f"{authority_name} regulatory guidance overview"),
+                guidelines=guidelines,
+                requirements=requirements[:6],
+                implementation=implementation[:5],
                 latest_updates=latest_updates,
-                actionable=actionable,
                 sources=sources,
             )
 
         if "biosimilar" in query_lower or "biosimilar" in query_lower:
             prefix = f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n" if query_mode == "latest" and authority else ""
-            key_points = [
+            guidelines = [
                 "Biosimilar assessment follows a totality-of-evidence approach with analytical similarity as the foundation.",
                 "FDA 351(k) pathway emphasizes residual uncertainty reduction through targeted nonclinical and clinical evidence.",
                 "Comparability principles such as ICH Q5E are practical for post-change similarity logic.",
@@ -328,58 +470,76 @@ Formatting Rules:
             latest_updates = [
                 f"{authority_name} latest biosimilar guidance should be prioritized by publication year and scope.",
             ]
-            actionable = [
+            implementation = [
                 "Build the development plan around analytical comparability first.",
                 "Justify any reduced clinical package with explicit residual uncertainty rationale.",
+            ]
+            requirements = [
+                "Demonstrate analytical similarity with predefined critical quality attributes.",
+                "Address residual uncertainty with targeted nonclinical/clinical evidence.",
             ]
             sources = [f"{authority_name} biosimilar guidance framework"]
             title = "Biosimilar guidance summary"
             if prefix:
                 latest_updates.insert(0, prefix.strip())
-            return self._build_structured_response(title, key_points, latest_updates, actionable, sources)
+            return self._build_structured_response(title, guidelines, requirements, implementation, latest_updates, sources)
 
         if "stability" in query_lower or "zone iv" in query_lower:
-            return (
-                "For stability strategy, anchor on ICH Q1A(R2) and regional implementation details.\n\n"
-                "Key insights:\n"
-                "- Long-term and accelerated conditions should support shelf-life and label storage statements.\n"
-                "- Zone IV programs often require hot/humid condition coverage and packaging-performance evidence.\n"
-                "- FDA and EMA expectations are broadly aligned to ICH, but filing practices and deficiency focus can differ by review division and product type.\n\n"
-                "Practical interpretation: pre-empt review questions by linking stability trends to specification strategy, transport stress, and container closure performance."
+            return self._build_structured_response(
+                title="Stability guideline implementation summary",
+                guidelines=["ICH Q1A(R2)", "ICH Q1B", "ICH Q1E"],
+                requirements=[
+                    "Define long-term and accelerated conditions aligned to product and climatic zone strategy.",
+                    "Use trend analysis and specification justification in stability protocols.",
+                ],
+                implementation=[
+                    "Link stability outcomes to shelf-life and storage statement decisions.",
+                    "Validate packaging configuration under stress and transport-relevant conditions.",
+                ],
+                latest_updates=["Apply the latest authority interpretation notes for stability expectations in submission reviews."],
+                sources=[f"{authority_name} stability guidance"],
             )
 
         if "clinical trial" in query_lower or "gcp" in query_lower:
-            return (
-                "Clinical trial compliance should be framed around ICH E6(R2/R3 transition), informed consent controls, and safety reporting governance.\n\n"
-                "Key insights:\n"
-                "- FDA: 21 CFR Parts 50, 56, 312 remain core for drug trials.\n"
-                "- EU/EMA environment: CTR 536/2014 operational requirements affect submissions and transparency workflows.\n"
-                "- Risk-based quality management is expected in modern GCP operations.\n\n"
-                "Practical interpretation: align protocol deviations, vendor oversight, and pharmacovigilance interfaces before first-patient-in to avoid inspection findings."
+            return self._build_structured_response(
+                title="Clinical trial compliance framework",
+                guidelines=["ICH E6(R2/R3)", "21 CFR Part 50", "21 CFR Part 56", "21 CFR Part 312"],
+                requirements=[
+                    "Maintain GCP-compliant informed consent, IRB/EC oversight, and safety reporting controls.",
+                    "Implement risk-based quality management across study lifecycle.",
+                ],
+                implementation=[
+                    "Define protocol deviation governance and CAPA workflow before first patient in.",
+                    "Align vendor oversight and pharmacovigilance interfaces with inspection-readiness evidence.",
+                ],
+                latest_updates=["Use the latest operational transition guidance for ICH E6 modernization."],
+                sources=[f"{authority_name} clinical trial guidance"],
             )
 
         if query_mode == "latest" and authority:
-            return (
-                f"No recent {authority}-specific updates found. Here is the most relevant current guidance:\n\n"
-                f"For {authority}, focus on the most recent applicable guidance framework tied to your query, then map requirements to submission content, lifecycle controls, and post-approval obligations.\n\n"
-                "Practical implications:\n"
-                "- Confirm the governing pathway and legal basis first.\n"
-                "- Translate guidance into actionable dossier sections and evidence requirements.\n"
-                "- Prioritize implementation by compliance risk and submission timelines."
+            pack = self._domain_guideline_pack(query, authority)
+            return self._build_structured_response(
+                title=pack["title"],
+                guidelines=pack["guidelines"],
+                requirements=pack["requirements"],
+                implementation=pack["implementation"],
+                latest_updates=pack["latest_updates"],
+                sources=pack["sources"],
             )
 
         return self._build_structured_response(
             title="Regulatory guidance summary",
-            key_points=[
+            guidelines=["ICH Q1A(R2)", "ICH Q2(R2)", "ICH Q8(R2)"],
+            requirements=[
                 f"Query scope: {query}",
                 "Identify governing regulations and authority-specific implementation requirements.",
                 "Prioritize obligations that affect submission content, CMC controls, labeling, and post-approval commitments.",
             ],
-            latest_updates=["Use the most recently available authority guidance and policy updates relevant to this topic."],
-            actionable=[
+            implementation=[
                 "Convert guidance requirements into a compliance action plan with owners and timelines.",
                 "Prepare evidence artifacts for audit and submission readiness.",
             ],
+            latest_updates=["Use the most recently available authority guidance and policy updates relevant to this topic."],
             sources=[f"{authority_name} regulatory framework"],
         )
 
