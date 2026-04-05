@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import api from "@/lib/api";
+import AuthorityLinks from "@/components/AuthorityLinks";
 
 interface UpdateItem {
   id: number;
@@ -519,6 +520,8 @@ export default function DashboardOverview() {
               </button>
             </div>
           </div>
+
+          <AuthorityLinks />
         </div>
       </section>
 
