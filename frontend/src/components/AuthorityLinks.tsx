@@ -19,7 +19,7 @@ const AUTHORITY_LINKS: AuthorityLink[] = [
 export default function AuthorityLinks() {
   return (
     <div className="card p-4 border border-white/10 fade-up">
-      <h3 className="text-lg font-semibold mb-3">Authority Links</h3>
+      <h3 className="text-lg font-semibold mb-3 text-[#0b152b]">Authority Links</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {AUTHORITY_LINKS.map((item) => (
           <a
@@ -27,13 +27,13 @@ export default function AuthorityLinks() {
             href={item.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="group flex items-center justify-between p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-[#00d9ff]/40 transition"
+            className="group flex items-center justify-between p-2 rounded-lg bg-white hover:bg-[#f4fbff] border border-[#d8e2ef] hover:border-[#00d9ff]/60 transition"
           >
-            <span className="flex items-center gap-2 text-xs font-medium text-white">
+            <span className="flex items-center gap-2 text-xs font-semibold text-[#0b152b]">
               <span aria-hidden>{item.icon}</span>
               <span>{item.name}</span>
             </span>
-            <span className="text-xs text-[#888] group-hover:text-[#00d9ff] transition" aria-hidden>
+            <span className="text-xs text-[#4b5b74] group-hover:text-[#00d9ff] transition" aria-hidden>
               ↗
             </span>
           </a>
