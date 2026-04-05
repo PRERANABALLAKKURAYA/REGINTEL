@@ -822,6 +822,34 @@ def get_analytics(db: Session = Depends(deps.get_db)):
         {"category": cat or "Other", "count": count}
         for cat, count in category_stats[:5]  # Top 5 categories
     ]
+
+    latest_update = db.query(Update).order_by(Update.published_date.desc()).first()
+    recent_cutoff = datetime.utcnow() - timedelta(days=7)
+    recent_update_count = db.query(Update).filter(Update.published_date >= recent_cutoff).count()
+
+    latest_by_authority = []
+    for authority_name, count in authority_stats:
+        latest = (
+            db.query(Update.published_date)
+            .join(Authority)
+            .filter(Authority.name == authority_name)
+            .order_by(Update.published_date.desc())
+            .first()
+        )
+        latest_by_authority.append(
+            {
+                "authority": authority_name,
+                "count": count,
+                "latestUpdate": latest[0].isoformat() if latest and latest[0] else None,
+            }
+        )
+
+    freshness_summary = {
+        "latestUpdateDate": latest_update.published_date.isoformat() if latest_update and latest_update.published_date else None,
+        "latestUpdateTitle": latest_update.title if latest_update else None,
+        "recent7DayCount": recent_update_count,
+        "stalenessAlert": recent_update_count < 7,
+    }
     
     # Weekly trend (mock data - would need query log table for real data)
     weekly_trend = [
@@ -846,10 +874,11 @@ def get_analytics(db: Session = Depends(deps.get_db)):
         "totalAlerts": total_notifications,
         "aiUsageCount": total_updates,
         "averageResponseTime": 1.2,
-        "authorityActivity": authority_activity,
+        "authorityActivity": latest_by_authority,
         "categoryDistribution": category_distribution,
         "weeklyTrend": weekly_trend,
         "queryClassification": query_classification,
+        "freshness": freshness_summary,
     }
 
 

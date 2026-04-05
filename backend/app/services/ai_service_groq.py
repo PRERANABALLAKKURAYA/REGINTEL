@@ -90,6 +90,20 @@ Formatting Rules:
 - If latest updates are unavailable, provide best current guidance in Latest Updates section
 - Never output phrases like: AI unavailable, No data found, Use latest guidance, Consult authorities""" 
 
+    def _response_style_hint(self, query: str, intent: str, query_mode: str) -> str:
+        q = (query or "").lower()
+        if query_mode == "latest":
+            return "Answer as a fresh regulatory briefing. Lead with the newest concrete change, then explain impact and any affected authority or document."
+        if "difference" in q or "compare" in q or "vs" in q:
+            return "Answer as a direct comparison. Use contrasts, then short practical implications."
+        if any(term in q for term in ["what is", "define", "meaning of", "explain"]):
+            return "Answer as a precise explanation. Start with a one-sentence definition, then give 2-4 specific regulatory points."
+        if any(term in q for term in ["how", "steps", "process", "implement"]):
+            return "Answer as an implementation guide. Use step-by-step actions and avoid abstract theory."
+        if intent == "LIST_REQUEST":
+            return "Answer as a concise, well-grouped list with concrete items and no filler."
+        return "Answer directly, avoid repetitive phrasing, and tailor the opening sentence to the specific query."
+
     def generate_smart_answer(
         self,
         query: str,
@@ -138,6 +152,8 @@ Formatting Rules:
                 query_mode=query_mode,
                 authority=detected_authority or "Not specified"
             )
+            style_hint = self._response_style_hint(query, intent, query_mode)
+            system_prompt = f"{system_prompt}\n\nStyle Hint:\n{style_hint}\n- Do not reuse the same opening sentence across different answers.\n- Prefer concrete nouns from the user query over generic phrasing."
 
             # Determine mode: RAG or General Knowledge
             if context.strip() and retrieval_metrics and retrieval_metrics.get("documents_injected", 0) > 0:

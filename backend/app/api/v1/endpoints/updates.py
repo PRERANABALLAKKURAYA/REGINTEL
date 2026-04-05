@@ -26,28 +26,38 @@ def get_db():
 @router.get("/homepage", response_model=List[Update])
 def read_homepage_updates(limit: int = 20, db: Session = Depends(get_db)):
     """
-    Get balanced updates showing all authorities.
-    Returns: balanced mix of recent updates from all 7 authorities (FDA, EMA, ICH, MHRA, PMDA, CDSCO, NMPA).
+    Get homepage updates with strict recency priority.
+    Returns the globally newest updates first, then fills with authority diversity if needed.
     """
-    # Get list of all authorities
-    authorities = db.query(Authority).all()
-    all_updates = []
-    
-    # Get recent updates per authority to ensure diversity
-    per_authority = max(1, limit // len(authorities))
-    
-    for authority in authorities:
-        auth_updates = (
-            db.query(UpdateModel)
-            .options(joinedload(UpdateModel.authority))
-            .filter(UpdateModel.authority_id == authority.id)
-            .order_by(UpdateModel.published_date.desc())
-            .limit(per_authority)
-            .all()
-        )
-        all_updates.extend(auth_updates)
-    
-    # Sort by published date descending and limit
+    # Step 1: Always prioritize global latest records.
+    all_updates = (
+        db.query(UpdateModel)
+        .options(joinedload(UpdateModel.authority))
+        .order_by(UpdateModel.published_date.desc())
+        .limit(limit)
+        .all()
+    )
+
+    # Step 2: Optional diversity fill only if global query returns fewer rows.
+    if len(all_updates) < limit:
+        existing_ids = {u.id for u in all_updates}
+        authorities = db.query(Authority).all()
+        for authority in authorities:
+            if len(all_updates) >= limit:
+                break
+            auth_latest = (
+                db.query(UpdateModel)
+                .options(joinedload(UpdateModel.authority))
+                .filter(UpdateModel.authority_id == authority.id)
+                .order_by(UpdateModel.published_date.desc())
+                .limit(1)
+                .all()
+            )
+            for update in auth_latest:
+                if update.id not in existing_ids and len(all_updates) < limit:
+                    all_updates.append(update)
+                    existing_ids.add(update.id)
+
     all_updates.sort(key=lambda x: x.published_date, reverse=True)
     all_updates = all_updates[:limit]
     
@@ -58,6 +68,8 @@ def read_homepage_updates(limit: int = 20, db: Session = Depends(get_db)):
         by_authority[auth_name] = by_authority.get(auth_name, 0) + 1
     
     print(f"[UPDATES] Homepage returned {len(all_updates)} records")
+    if all_updates:
+        print(f"[UPDATES] Newest record date: {all_updates[0].published_date}")
     print(f"[UPDATES] Distribution: {by_authority}")
     
     return all_updates
