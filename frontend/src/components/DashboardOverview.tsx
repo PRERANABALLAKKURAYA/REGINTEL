@@ -368,7 +368,7 @@ export default function DashboardOverview() {
                           {update.category}
                         </span>
                       </div>
-                      <h3 className="mt-2 text-sm font-semibold text-white leading-snug">{update.title}</h3>
+                      <h3 className="mt-2 text-sm font-semibold text-[#0b152b] leading-snug">{update.title}</h3>
                       {update.short_summary ? (
                         <p className="mt-2 text-xs text-[#2a2a2a] leading-relaxed line-clamp-2">
                           {update.short_summary}
