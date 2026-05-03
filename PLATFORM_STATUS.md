@@ -1,4 +1,4 @@
-# RegIntel Atlas - Comprehensive Regulatory Intelligence Platform
+# RA upIntel - Comprehensive Regulatory Intelligence Platform
 
 ## ✅ COMPLETED FEATURES
 

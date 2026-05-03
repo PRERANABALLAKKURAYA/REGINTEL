@@ -177,7 +177,7 @@ async def fetch_web_context(query: str, authority: str | None = None) -> str:
     try:
         async with httpx.AsyncClient(
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; RegIntelBot/1.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; RAupIntelBot/1.0)"},
             timeout=1.5,
         ) as client:
             # Step 1: Search for trusted pages

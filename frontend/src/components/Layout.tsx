@@ -66,7 +66,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       >
         <div className="p-6 sticky top-0 bg-gradient-to-b from-[#0b152b] to-[#0a0f1a] border-b border-white/10">
           <div className="font-[var(--font-display)] text-2xl font-bold bg-gradient-to-r from-[#00d9ff] to-[#7f5af0] bg-clip-text text-transparent">
-            RegIntel
+            RA upIntel
           </div>
           <p className="text-xs text-[#888] mt-1">Pharmaceutical Intelligence</p>
         </div>

@@ -88,7 +88,8 @@ export default function DashboardOverview() {
     const fetchAll = async () => {
       try {
         const [updatesRes, authoritiesRes, notificationsRes, gamificationRes] = await Promise.all([
-          api.get("/updates/homepage?limit=20"),
+          // Load a larger set so client-side filters (by authority/category) work reliably
+          api.get("/updates/?limit=150"),
           api.get("/authorities/"),
           api.get("/notifications/"),
           api.get("/gamification/"),

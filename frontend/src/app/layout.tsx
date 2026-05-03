@@ -13,7 +13,7 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "RegIntel Atlas",
+  title: "RA upIntel",
   description:
     "Global pharmaceutical regulatory intelligence with AI summaries, alerts, and RAG search.",
 };

@@ -276,7 +276,7 @@ OPENAI_API_KEY=optional-for-real-openai-integration
 ### Frontend (.env.local recommended)
 ```
 NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_APP_NAME=RegIntel Atlas
+NEXT_PUBLIC_APP_NAME=RA upIntel
 ```
 
 ---

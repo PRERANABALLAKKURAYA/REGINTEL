@@ -71,7 +71,7 @@ export default function AuthPage() {
       <div className="relative max-w-md w-full">
         <div className="card p-8 md:p-10">
           <div className="text-center mb-8">
-            <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">RegIntel Atlas</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">RA upIntel</p>
             <h1 className="mt-2 font-[var(--font-display)] text-3xl font-bold">
               {mode === "login" ? "Welcome Back" : "Join Us"}
             </h1>
